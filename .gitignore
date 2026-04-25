@@ -1,0 +1,19 @@
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (only for the optional terser step)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Build artifacts (the .min.js is checked in intentionally)
+*.tmp
+*.bak
