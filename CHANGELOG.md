@@ -2,6 +2,18 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
+## [2026-05-09.1] — Edge injection fix
+
+Fixed the script silently failing to run under Tampermonkey on Microsoft Edge ("This script hasn't run yet" with no error). The script was matched and jQuery loaded fine; the issue was Edge's MV3 extension model interacting poorly with the metadata block.
+
+Three metadata changes:
+
+`@grant none` → `@grant GM_addStyle`. Forces Tampermonkey into sandboxed extension-context injection instead of inline page-context injection. The sandbox still has access to `window.jQuery` from the wiki, so the script body is unchanged. Declaring any non-`none` grant flips the injection mode; `GM_addStyle` is declared but unused.
+
+`@run-at document-idle` → `@run-at document-end`. Fires earlier and avoids racing the wiki's deferred analytics/ad scripts. The script's existing init already waits for `[data-taskid]` rows, so moving up `@run-at` is safe.
+
+`@include` → `@match`. Stricter, better-supported across browsers. Dropped the `*_League/Tasks*` wildcard since `@match` doesn't allow `*` mid-path. Future leagues will need a metadata bump rather than auto-matching — a fair trade for portability.
+
 ## [2026-04-25.7] — initial public release
 
 Forked from Loaf's original Trailblazer Reloaded / Raging Echoes script and substantially extended.
