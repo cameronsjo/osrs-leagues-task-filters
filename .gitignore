@@ -17,3 +17,6 @@ yarn.lock
 # Build artifacts (the .min.js is checked in intentionally)
 *.tmp
 *.bak
+
+# Playwright MCP server local artifacts (snapshots, console logs)
+.playwright-mcp/

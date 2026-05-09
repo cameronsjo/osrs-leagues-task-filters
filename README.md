@@ -32,9 +32,13 @@ The wiki already has a per-area visibility picker (the row of `data-league-area`
 
 ## Compatibility
 
-`@include` patterns match the three known leagues plus a wildcard `*_League/Tasks*` for forward compatibility. The script keys off the table's `[data-taskid]` rows and `data-sort-value` attributes — both have been stable across leagues since at least Trailblazer Reloaded. Difficulty detection works against either the Trailblazer image set or the Demonic Pacts pact-tasks image set; both naming conventions are handled.
+`@match` patterns target the three known leagues — Demonic Pacts, Raging Echoes, Trailblazer Reloaded. New leagues need a one-line metadata bump rather than auto-matching via wildcard, traded for stricter and more portable matching across script managers. The script keys off the table's `[data-taskid]` rows and `data-sort-value` attributes — both have been stable across leagues since at least Trailblazer Reloaded. Difficulty detection works against either the Trailblazer image set or the Demonic Pacts pact-tasks image set; both naming conventions are handled.
 
 `@require` pulls jQuery 3.7.1 from jsDelivr into the userscript sandbox. The OSRS wiki ships its own jQuery, but under sandbox-mode injection (which `@grant GM_addStyle` triggers in Violentmonkey, and Tampermonkey under some configs), the page's jQuery is a cross-context `Proxy` that's readable but not callable from the isolated world — so the script needs its own copy. The existing `if (!window.jQuery) return` guard provides a clean fallback if the require ever fails.
+
+### Edge users: enable "Developer mode"
+
+Microsoft Edge requires **Developer mode** to be enabled in `edge://extensions/` for any userscript manager (Tampermonkey, Violentmonkey, etc.) to actually inject scripts into pages. If you have Tampermonkey installed and the script enabled but it never runs ("This script hasn't run yet" with no console errors), this is almost certainly the cause. Toggle the Developer mode switch in the bottom-left of `edge://extensions/`, reload the wiki page, and the panel will render.
 
 ## Development
 
