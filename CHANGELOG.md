@@ -2,6 +2,12 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
+## [2026-05-09.2] — drop `@require` jQuery
+
+Removed `@require https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js`. The `2026-05-09.1` metadata changes weren't enough to fix Tampermonkey-on-Edge injection. A Playwright Chromium run injecting the bundle directly into the page confirmed the script body works end-to-end — 1592 tasks indexed, panel rendered, all logs clean — proving the bug was in Tampermonkey's extension-side handling of this script, not in the script itself.
+
+The most likely remaining cause was Tampermonkey's separate extension-context fetch of the `@require` URL failing silently under Edge's MV3 model. Removing the `@require` eliminates that failure mode entirely. The OSRS wiki ships its own jQuery 3.7.1 (verified via Playwright on the live page) and the script's existing `if (!window.jQuery) return` guard logs and bails gracefully if it ever disappears, so this is a pure simplification — fewer external dependencies, faster load, no cross-CDN extension-network surface.
+
 ## [2026-05-09.1] — Edge injection fix
 
 Fixed the script silently failing to run under Tampermonkey on Microsoft Edge ("This script hasn't run yet" with no error). The script was matched and jQuery loaded fine; the issue was Edge's MV3 extension model interacting poorly with the metadata block.

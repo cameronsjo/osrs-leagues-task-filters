@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSRS Wiki - Leagues Task Filters
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-09.1
+// @version      2026-05-09.2
 // @description  Filtering, search, and stats for Leagues task pages on the OSRS Wiki. Themed to match the wiki. Supports Demonic Pacts (VI), Raging Echoes (V), Trailblazer Reloaded (IV), and any future league with a /Tasks page. Honors the wiki's native area picker and hide-completed toggle.
 // @author       Cameron Johnson (cameronsjo). Original by https://oldschool.runescape.wiki/w/User:Loaf
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=runescape.wiki
@@ -9,7 +9,6 @@
 // @supportURL   https://github.com/cameronsjo/osrs-leagues-task-filters/issues
 // @downloadURL  https://raw.githubusercontent.com/cameronsjo/osrs-leagues-task-filters/main/osrs-leagues-task-filters.user.js
 // @updateURL    https://raw.githubusercontent.com/cameronsjo/osrs-leagues-task-filters/main/osrs-leagues-task-filters.user.js
-// @require      https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js
 // @grant        GM_addStyle
 // @license      MIT
 // @run-at       document-end
