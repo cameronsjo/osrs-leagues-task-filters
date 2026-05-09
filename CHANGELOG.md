@@ -2,6 +2,12 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
+## [2026-05-09.4] — more synthetic pseudo-skills + per-group "select all"
+
+Added five new synthetic pseudo-skills to the **Skill** filter group, on top of the existing **Clue**: **Combat Achievement**, **Collection Log**, **25M XP**, **35M XP**, **50M XP**. Like Clue, these activities have no `data-skill` attribute on the wiki, so they're detected by regex against task name and description. Counts on the Demonic Pacts page (verified live): Clue 49, Combat Achievement 51, Collection Log 23, 25M XP 19, 35M XP 19, 50M XP 24. The detection table is now a single `SYNTHETIC_SKILLS` const, so adding more later is one line.
+
+Added a **✓ "Select all"** button to each checkbox-based filter group's header (Difficulty, Task type, Skill, Status), next to the existing × clear button. Use it to flip a group from "include these" to "exclude these": click ✓ to check everything, then uncheck the ones to exclude. Common case: "show me everything except Master tier" → click ✓ on Difficulty, uncheck Master.
+
 ## [2026-05-09.3] — re-add `@require` jQuery (post-Edge-dev-mode fix)
 
 Edge's "Developer mode" toggle in `edge://extensions/` was the actual gate for Tampermonkey/Violentmonkey to inject scripts at all — none of the metadata changes in `2026-05-09.1` or `.2` were strictly necessary, though they did harden the script. With developer mode on, injection works.

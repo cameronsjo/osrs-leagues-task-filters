@@ -18,9 +18,9 @@ Updates are automatic. The script's `@updateURL` points back at this repo's `mai
 
 ## What you get
 
-A search box at the top filters tasks by name or description as you type — `/` focuses it, `Esc` clears it. Below that, six filter groups: **Difficulty** (Easy / Medium / Hard / Elite / Master), **Task type** (Pact tasks vs Regular tasks for Demonic Pacts), **Skill** (every real OSRS skill plus a synthetic **Clue** entry that matches `clue scroll` / `treasure trail` / `clue` references in the task text — the wiki doesn't tag those, so this surfaces the 49 clue-related tasks that would otherwise be unfilterable by skill), **Status** (Completed / Incomplete via WikiSync), **Points range**, and **Completion %** range.
+A search box at the top filters tasks by name or description as you type — `/` focuses it, `Esc` clears it. Below that, six filter groups: **Difficulty** (Easy / Medium / Hard / Elite / Master), **Task type** (Pact tasks vs Regular tasks for Demonic Pacts), **Skill** (every real OSRS skill plus synthetic entries for **Clue**, **Combat Achievement**, **Collection Log**, **25M XP**, **35M XP**, and **50M XP** — the wiki doesn't tag these activities, so the script detects them via regex on task name and description; on Demonic Pacts that surfaces 49, 51, 23, 19, 19, and 24 tasks respectively), **Status** (Completed / Incomplete via WikiSync), **Points range**, and **Completion %** range.
 
-Filters use OR semantics within a group and AND across groups. So *Karamja + Hard + Magic* means tasks in Karamja AND of Hard difficulty AND requiring Magic. Each group has a small × button to clear just that group; a global "Clear all filters" sits in the panel header.
+Filters use OR semantics within a group and AND across groups. So *Karamja + Hard + Magic* means tasks in Karamja AND of Hard difficulty AND requiring Magic. Each checkbox group's header has a small **✓** button (select all — useful for treating the group as exclusion: check everything, then uncheck what to exclude) and a **×** button (clear). A global "Clear all filters" sits in the panel header.
 
 A live stats bar shows total points available, points completed (when WikiSync is active), and a row counter ("Showing N / 1592 tasks — X pts visible") that updates as you type.
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSRS Wiki - Leagues Task Filters
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-09.3
+// @version      2026-05-09.4
 // @description  Filtering, search, and stats for Leagues task pages on the OSRS Wiki. Themed to match the wiki. Supports Demonic Pacts (VI), Raging Echoes (V), Trailblazer Reloaded (IV), and any future league with a /Tasks page. Honors the wiki's native area picker and hide-completed toggle.
 // @author       Cameron Johnson (cameronsjo). Original by https://oldschool.runescape.wiki/w/User:Loaf
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=runescape.wiki
@@ -48,10 +48,18 @@
   const DIFFICULTY_REGEX = new RegExp(`(${DIFFICULTIES.join('|')})\\.png`, 'i');
   const PACT_TASK_IMG_REGEX = /Demonic_Pacts_League_pact_tasks/i;
 
-  // Synthetic "Clue" pseudo-skill — clue scrolls aren't a real OSRS skill, so
-  // there's no data-skill attribute. We detect them by name + description.
-  const CLUE_SKILL = 'Clue';
-  const CLUE_REGEX = /\bclue scroll\b|\btreasure trail\b|\bclue\b/i;
+  // Synthetic pseudo-skills — these activities aren't real OSRS skills and
+  // have no data-skill attribute on the wiki, so we detect them by regex
+  // against the task name and description and add them to the row's skill
+  // set. Each entry: [displayName, regex].
+  const SYNTHETIC_SKILLS = [
+    ['Clue', /\bclue scroll\b|\btreasure trail\b|\bclue\b/i],
+    ['Combat Achievement', /\bcombat achievement(?:s|\s+diary)?\b/i],
+    ['Collection Log', /\bcollection log\b/i],
+    ['25M XP', /\b25[\s,]*(?:million|m|,000,000)\s*(?:xp|experience)\b/i],
+    ['35M XP', /\b35[\s,]*(?:million|m|,000,000)\s*(?:xp|experience)\b/i],
+    ['50M XP', /\b50[\s,]*(?:million|m|,000,000)\s*(?:xp|experience)\b/i],
+  ];
 
   // The wiki's native area picker writes to these localStorage keys.
   // Value "false" = the user hid that area; missing/"true" = visible.
@@ -171,8 +179,11 @@
         const sk = $(s).attr('data-skill');
         if (sk) skills.add(sk);
       });
-      // Synthetic Clue pseudo-skill
-      if (CLUE_REGEX.test(`${name} ${description}`)) skills.add(CLUE_SKILL);
+      // Synthetic pseudo-skills (Clue, Combat Achievement, Collection Log)
+      const haystack = `${name} ${description}`;
+      for (const [label, regex] of SYNTHETIC_SKILLS) {
+        if (regex.test(haystack)) skills.add(label);
+      }
 
       const ptsText = cells.eq(4).text().trim();
       const points = parseInt(ptsText, 10) || 0;
@@ -335,6 +346,10 @@
       background: ${cssVar('--body-light', '#d8ccb4')};
       border-color: ${cssVar('--wikitable-border', '#94866d')};
     }
+    #${FILTERS_ID} .lf-group-actions {
+      display: flex;
+      gap: 4px;
+    }
     #${FILTERS_ID} .lf-options {
       display: flex;
       flex-direction: column;
@@ -426,7 +441,7 @@
     }).join('');
     return `
       <div class="lf-group" data-lf-group="${kind}">
-        <h4>${titleHtml}<button type="button" data-lf-clear-group="${kind}" title="Clear">×</button></h4>
+        <h4>${titleHtml}<span class="lf-group-actions"><button type="button" data-lf-select-group="${kind}" title="Select all (use as exclusion)">✓</button><button type="button" data-lf-clear-group="${kind}" title="Clear">×</button></span></h4>
         <div class="lf-options">${opts || '<em style="opacity:0.6">none</em>'}</div>
       </div>`;
   };
@@ -528,6 +543,16 @@
       const kind = $(this).attr('data-lf-clear-group');
       [...activeFilters].forEach((f) => { if (f.startsWith(`${kind}:`)) activeFilters.delete(f); });
       $(`#${FILTERS_ID} input[data-lf-kind="${kind}"]`).prop('checked', false);
+      saveFilters();
+      applyFilters();
+    });
+
+    $(`#${FILTERS_ID}`).on('click', '[data-lf-select-group]', function () {
+      const kind = $(this).attr('data-lf-select-group');
+      $(`#${FILTERS_ID} input[data-lf-kind="${kind}"]`).each(function () {
+        activeFilters.add(`${kind}:${$(this).attr('data-lf-val')}`);
+        this.checked = true;
+      });
       saveFilters();
       applyFilters();
     });
