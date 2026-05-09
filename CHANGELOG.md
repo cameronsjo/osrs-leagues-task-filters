@@ -2,7 +2,15 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
-## [2026-05-09.2] — drop `@require` jQuery
+## [2026-05-09.3] — re-add `@require` jQuery (post-Edge-dev-mode fix)
+
+Edge's "Developer mode" toggle in `edge://extensions/` was the actual gate for Tampermonkey/Violentmonkey to inject scripts at all — none of the metadata changes in `2026-05-09.1` or `.2` were strictly necessary, though they did harden the script. With developer mode on, injection works.
+
+But running under Violentmonkey-style isolated-world sandbox (which `@grant GM_addStyle` triggers), the script body crashed with `TypeError: $ is not a function` at `$(document).ready(...)`. In the sandbox, `window.jQuery` is a `Proxy` that exposes the page's jQuery — readable, but cross-context function objects aren't always callable from the isolated world. Re-introducing `@require` loads jQuery directly into the sandbox so `$` is a real, callable function in the same context as the script.
+
+Net effect: keep the sandbox grant + `document-end` + `@match` from `.1`, restore the `@require` from `.2`. The earlier removal was a wrong inference — we'd ruled out @require as the cause of the injection failure based on incomplete diagnostic data; the actual failure mode was Edge developer mode, not the @require fetch.
+
+## [2026-05-09.2] — drop `@require` jQuery (later reverted in .3)
 
 Removed `@require https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js`. The `2026-05-09.1` metadata changes weren't enough to fix Tampermonkey-on-Edge injection. A Playwright Chromium run injecting the bundle directly into the page confirmed the script body works end-to-end — 1592 tasks indexed, panel rendered, all logs clean — proving the bug was in Tampermonkey's extension-side handling of this script, not in the script itself.
 

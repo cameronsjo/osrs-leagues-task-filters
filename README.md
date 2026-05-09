@@ -34,7 +34,7 @@ The wiki already has a per-area visibility picker (the row of `data-league-area`
 
 `@include` patterns match the three known leagues plus a wildcard `*_League/Tasks*` for forward compatibility. The script keys off the table's `[data-taskid]` rows and `data-sort-value` attributes — both have been stable across leagues since at least Trailblazer Reloaded. Difficulty detection works against either the Trailblazer image set or the Demonic Pacts pact-tasks image set; both naming conventions are handled.
 
-No `@require` and no external dependencies. The script reads `window.jQuery` directly from the wiki, which ships its own jQuery 3.7.1. If the wiki's jQuery ever disappears, the script logs a warning and exits cleanly via its `if (!window.jQuery) return` guard. Earlier versions pulled jQuery from jsDelivr defensively, but that surfaced as silent injection failures under Tampermonkey on Edge (MV3) — see the changelog for `2026-05-09.2`.
+`@require` pulls jQuery 3.7.1 from jsDelivr into the userscript sandbox. The OSRS wiki ships its own jQuery, but under sandbox-mode injection (which `@grant GM_addStyle` triggers in Violentmonkey, and Tampermonkey under some configs), the page's jQuery is a cross-context `Proxy` that's readable but not callable from the isolated world — so the script needs its own copy. The existing `if (!window.jQuery) return` guard provides a clean fallback if the require ever fails.
 
 ## Development
 
