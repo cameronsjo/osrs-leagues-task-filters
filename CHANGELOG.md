@@ -2,6 +2,14 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
+## [2026-05-14.1] — personal todo list
+
+Added a per-row **todo** checkbox and a matching **Todo list** filter group. Tick the checkbox prefixed inside any task's name cell to add the task to a personal shortlist; flip "Show only marked" in the Todo group to hide everything else. Marked rows get a subtle left-border accent in the wiki link color so they're easy to scan at a glance. The list is stored under `lf:<League_Key>:todo` so each league has its own — your Demonic Pacts shortlist and Trailblazer shortlist don't share state.
+
+Implemented as a dedicated `HIDE_REASONS.SHORTLIST` reason rather than overloading the existing Status group: the in-group OR semantics would have wrongly surfaced unmarked completed/incomplete rows when both were selected. A `Clear list` button inside the Todo group wipes the set after a confirm. "Clear all filters" turns off the "Show only marked" toggle but **leaves the list intact** — the shortlist is curated work, not a transient filter, and shouldn't get nuked alongside a search reset.
+
+`window.LeaguesFilters.state()` now exposes `todo` (count) and `todoOnly` (bool) for debugging.
+
 ## [2026-05-09.4] — more synthetic pseudo-skills + per-group "select all"
 
 Added five new synthetic pseudo-skills to the **Skill** filter group, on top of the existing **Clue**: **Combat Achievement**, **Collection Log**, **25M XP**, **35M XP**, **50M XP**. Like Clue, these activities have no `data-skill` attribute on the wiki, so they're detected by regex against task name and description. Counts on the Demonic Pacts page (verified live): Clue 49, Combat Achievement 51, Collection Log 23, 25M XP 19, 35M XP 19, 50M XP 24. The detection table is now a single `SYNTHETIC_SKILLS` const, so adding more later is one line.

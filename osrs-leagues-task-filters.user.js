@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSRS Wiki - Leagues Task Filters
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-09.4
+// @version      2026-05-14.1
 // @description  Filtering, search, and stats for Leagues task pages on the OSRS Wiki. Themed to match the wiki. Supports Demonic Pacts (VI), Raging Echoes (V), Trailblazer Reloaded (IV), and any future league with a /Tasks page. Honors the wiki's native area picker and hide-completed toggle.
 // @author       Cameron Johnson (cameronsjo). Original by https://oldschool.runescape.wiki/w/User:Loaf
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=runescape.wiki
@@ -34,12 +34,14 @@
 
   const STORAGE_PREFIX = `lf:${LEAGUE_KEY}:`;
   const LS = {
-    filters: `${STORAGE_PREFIX}filters`,
-    search:  `${STORAGE_PREFIX}search`,
-    minPts:  `${STORAGE_PREFIX}minPts`,
-    maxPts:  `${STORAGE_PREFIX}maxPts`,
-    minComp: `${STORAGE_PREFIX}minComp`,
-    maxComp: `${STORAGE_PREFIX}maxComp`,
+    filters:  `${STORAGE_PREFIX}filters`,
+    search:   `${STORAGE_PREFIX}search`,
+    minPts:   `${STORAGE_PREFIX}minPts`,
+    maxPts:   `${STORAGE_PREFIX}maxPts`,
+    minComp:  `${STORAGE_PREFIX}minComp`,
+    maxComp:  `${STORAGE_PREFIX}maxComp`,
+    todo:     `${STORAGE_PREFIX}todo`,
+    todoOnly: `${STORAGE_PREFIX}todoOnly`,
   };
 
   // Difficulty images use either the DPL "pact tasks" set OR the legacy
@@ -76,8 +78,8 @@
   const FILTERED_ATTR = 'data-lf-filtered';
   const WIKI_AREA_NOTE_ID = 'lf-wiki-area-note';
 
-  // Hidden because of: f=filter, s=search, p=points, c=completion, w=wiki area mask
-  const HIDE_REASONS = { FILTER: 'f', SEARCH: 's', POINTS: 'p', COMP: 'c', WIKI_AREA: 'w' };
+  // Hidden because of: f=filter, s=search, p=points, c=completion, w=wiki area mask, t=shortlist
+  const HIDE_REASONS = { FILTER: 'f', SEARCH: 's', POINTS: 'p', COMP: 'c', WIKI_AREA: 'w', SHORTLIST: 't' };
 
   // ============================================================
   // STATE
@@ -88,6 +90,10 @@
   let pointsMax       = Infinity;
   let compMin         = 0;
   let compMax         = 100;
+  /** Task ids the user has shortlisted as a personal todo. Per-league via STORAGE_PREFIX. */
+  let todoSet         = new Set();
+  /** When true, only rows in todoSet are visible. */
+  let todoOnly        = false;
 
   /** @type {Map<string, TaskMeta>} */
   const tasks = new Map();
@@ -131,17 +137,21 @@
     pointsMax     = Number(localStorage.getItem(LS.maxPts)) || Infinity;
     compMin       = Number(localStorage.getItem(LS.minComp)) || 0;
     compMax       = Number(localStorage.getItem(LS.maxComp)) || 100;
+    todoSet       = new Set(safeJSON(localStorage.getItem(LS.todo), []));
+    todoOnly      = localStorage.getItem(LS.todoOnly) === '1';
   };
-  const saveFilters = () => localStorage.setItem(LS.filters, JSON.stringify([...activeFilters]));
-  const saveSearch  = () => localStorage.setItem(LS.search, searchQuery);
-  const savePoints  = () => {
+  const saveFilters  = () => localStorage.setItem(LS.filters, JSON.stringify([...activeFilters]));
+  const saveSearch   = () => localStorage.setItem(LS.search, searchQuery);
+  const savePoints   = () => {
     localStorage.setItem(LS.minPts, String(pointsMin));
     localStorage.setItem(LS.maxPts, isFinite(pointsMax) ? String(pointsMax) : '');
   };
-  const saveComp    = () => {
+  const saveComp     = () => {
     localStorage.setItem(LS.minComp, String(compMin));
     localStorage.setItem(LS.maxComp, String(compMax));
   };
+  const saveTodo     = () => localStorage.setItem(LS.todo, JSON.stringify([...todoSet]));
+  const saveTodoOnly = () => localStorage.setItem(LS.todoOnly, todoOnly ? '1' : '0');
 
   // ============================================================
   // TABLE PARSING
@@ -171,8 +181,17 @@
       const id = $row.attr('data-taskid');
       const cells = $row.children();
       const area = (cells.eq(0).attr('data-sort-value') || cells.eq(0).text().trim() || 'General').trim();
+      // Capture name text BEFORE injecting the shortlist checkbox so the checkbox markup
+      // doesn't pollute name or search haystack values.
       const name = cells.eq(1).text().trim();
       const description = cells.eq(2).text().trim();
+      const isOnList = todoSet.has(id);
+      cells.eq(1).prepend(
+        `<label class="lf-todo-row" title="Add to my todo list">` +
+          `<input type="checkbox" class="lf-todo-cb" data-lf-todo-id="${id}"${isOnList ? ' checked' : ''}/>` +
+        `</label>`
+      );
+      if (isOnList) $row.attr('data-lf-todo', '1');
       const { difficulty, isPact } = parseDifficulty($row);
       const skills = new Set();
       $row.find('[data-skill]').each((_, s) => {
@@ -254,6 +273,7 @@
     const pct = Math.min(task.completionPct, 100);
     return pct >= compMin && pct <= compMax;
   };
+  const matchesTodo = (task) => !todoOnly || todoSet.has(task.id);
 
   const applyFilters = () => {
     refreshWikiHiddenAreas();
@@ -269,6 +289,7 @@
       if (!matchesSearch(task)) reasons.push(HIDE_REASONS.SEARCH);
       if (!matchesPoints(task)) reasons.push(HIDE_REASONS.POINTS);
       if (!matchesComp(task))   reasons.push(HIDE_REASONS.COMP);
+      if (!matchesTodo(task))   reasons.push(HIDE_REASONS.SHORTLIST);
       if (reasons.length === 0) {
         $row.removeAttr(FILTERED_ATTR).css('display', '');
         visible += 1;
@@ -279,6 +300,7 @@
     });
     updateStatus(visible, visiblePts, totalPts, completedPts);
     updateWikiAreaNote();
+    updateTodoCount();
   };
 
   // ============================================================
@@ -420,6 +442,18 @@
       background: ${cssVar('--body-light', '#d8ccb4')};
       border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
     }
+    .lf-todo-row {
+      display: inline-flex;
+      align-items: center;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .lf-todo-row input[type="checkbox"] { cursor: pointer; }
+    tr[data-lf-todo="1"] {
+      box-shadow: inset 4px 0 0 ${cssVar('--link-color', '#936039')};
+    }
+    #${FILTERS_ID} [data-lf-group="todo"] { min-width: 180px; }
+    #${FILTERS_ID} #lf-todo-count { font-size: 0.8em; opacity: 0.7; padding-top: 2px; }
   `;
 
   const injectStyles = () => {
@@ -476,6 +510,13 @@
             ${typeOpts.length > 1 ? groupOptions('Task type', new Set(typeOpts), 'type', (t) => t === 'pact' ? 'Pact tasks' : 'Regular tasks') : ''}
             ${groupOptions('Skill',        dims.skills,       'skill')}
             ${groupOptions('Status',       new Set(miscOpts), 'misc', (m) => ({ complete: 'Completed', incomplete: 'Incomplete' }[m] || m))}
+            <div class="lf-group" data-lf-group="todo">
+              <h4>Todo list <span class="lf-group-actions"><button type="button" data-lf-clear-todo title="Empty the todo list">Clear list</button></span></h4>
+              <div class="lf-options">
+                <label for="lf-todo-only"><input type="checkbox" id="lf-todo-only" ${todoOnly ? 'checked' : ''}/> Show only marked</label>
+                <div id="lf-todo-count"></div>
+              </div>
+            </div>
             <div class="lf-group">
               <h4>Points <button type="button" data-lf-reset="points">×</button></h4>
               <div class="lf-range">
@@ -500,6 +541,12 @@
       </div>`;
 
     $table.before(html);
+  };
+
+  const updateTodoCount = () => {
+    const $el = $('#lf-todo-count');
+    if (!$el.length) return;
+    $el.text(`${todoSet.size} marked`);
   };
 
   const updateWikiAreaNote = () => {
@@ -578,11 +625,51 @@
       searchQuery = '';
       pointsMin = 0; pointsMax = Infinity;
       compMin = 0; compMax = 100;
-      saveFilters(); saveSearch(); savePoints(); saveComp();
+      // Intentionally do NOT clear todoSet — the shortlist is curated, not a transient
+      // filter. We only turn off the "show only marked" toggle.
+      todoOnly = false;
+      saveFilters(); saveSearch(); savePoints(); saveComp(); saveTodoOnly();
       $(`#${FILTERS_ID} input[data-lf-kind]`).prop('checked', false);
       $(`#${SEARCH_ID}`).val('');
       $('#lf-pts-min').val(0); $('#lf-pts-max').val(dims.pointsObserved.max);
       $('#lf-comp-min').val(0); $('#lf-comp-max').val(100);
+      $('#lf-todo-only').prop('checked', false);
+      applyFilters();
+    });
+
+    // Per-row todo checkbox — delegated on the leagues table so it survives any
+    // re-render the wiki might trigger.
+    $(`#${TABLE_ID}`).on('change', 'input.lf-todo-cb', function () {
+      const id = $(this).attr('data-lf-todo-id');
+      const $row = $(this).closest('tr');
+      if (this.checked) {
+        todoSet.add(id);
+        $row.attr('data-lf-todo', '1');
+      } else {
+        todoSet.delete(id);
+        $row.removeAttr('data-lf-todo');
+      }
+      saveTodo();
+      applyFilters();
+    });
+
+    // Stop the checkbox label from bubbling click into any wiki-row handler
+    // (the wiki itself doesn't currently bind row clicks, but be defensive).
+    $(`#${TABLE_ID}`).on('click', '.lf-todo-row', (e) => e.stopPropagation());
+
+    $('#lf-todo-only').on('change', function () {
+      todoOnly = this.checked;
+      saveTodoOnly();
+      applyFilters();
+    });
+
+    $(`#${FILTERS_ID}`).on('click', '[data-lf-clear-todo]', () => {
+      if (todoSet.size === 0) return;
+      if (!window.confirm(`Empty your todo list (${todoSet.size} marked)?`)) return;
+      todoSet.clear();
+      saveTodo();
+      $(`#${TABLE_ID} input.lf-todo-cb`).prop('checked', false);
+      $(`#${TABLE_ID} tr[data-lf-todo]`).removeAttr('data-lf-todo');
       applyFilters();
     });
 
@@ -722,6 +809,8 @@
       difficulties: [...dims.difficulties],
       wikiHiddenAreas: [...wikiHiddenAreas],
       activeFilters: [...activeFilters],
+      todo: todoSet.size,
+      todoOnly,
       panelInDom: !!document.getElementById(FILTERS_ID),
     }),
   };
