@@ -2,6 +2,28 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
+## [2026-05-14.3] — tri-state Plan column, won't-do, markdown export, panel polish
+
+The per-row todo checkbox grew up. It's now a **Plan** column inserted as the first column of the leagues table, holding a click-cycle button that walks each task through three states: **☐ untouched → ✓ todo → ✗ won't do → ☐**. Won't-do rows fade their content to 50% so they read as "deprecated" without needing a new color; todo rows keep the warm left-rail accent. The column has a `data-sort-value` so the wiki's built-in sort handles it; sorting by Plan groups your curated tasks at the top or bottom of the table.
+
+The Todo filter group gains a second toggle — **Hide won't-do tasks** — so the two lists work independently. The counter now reads `N todo · M won't-do`, and **Clear** now wipes both sets after a single confirm. Storage keys are `lf:<League>:todo` (existing) and `lf:<League>:wontDo` (new); the sets are kept disjoint defensively at load time.
+
+Added a **markdown export**. A small **Export** button next to **Clear** in the Todo group copies your todo list to the clipboard as a clean checklist grouped by area:
+
+```markdown
+# Demonic Pacts League — Todo
+*Generated 2026-05-14 · 3 tasks · 80 pts*
+
+## Asgarnia
+- [ ] **Hard** · 30 pts · Catch a Black Salamander
+```
+
+If the clipboard write fails (rare — CSP edge cases), the toast falls back to a pre-selected textarea so Ctrl+C still works. No overlays, no floating widgets — the toast renders in-flow inside the Todo group.
+
+Quiet design polish on the whole panel, holding the wiki's parchment palette: small uppercase letter-spaced group titles (more editorial than chunky), `tabular-nums` on all numeric output so counts stop dancing on each filter pass, `120ms` transitions on every hover/focus surface, visible `outline: 2px solid var(--link-color)` focus rings for keyboard users, inset hairline highlight (`rgba(255,255,255,0.35)`) on the panel and group cards for a subtle parchment lift, a left-border accent on the wiki-area note, palette-matched thin scrollbars on long option lists, and a quieter "Filters" eyebrow next to the league name. No new colors, no new fonts, no new dependencies. The header layout keeps wrapping behavior on narrow viewports.
+
+`window.LeaguesFilters.state()` now exposes `wontDo` (count) and `hideWontDo` (bool) alongside the existing fields.
+
 ## [2026-05-14.2] — hide blocked tasks (WikiSync qc-not-started)
 
 Added a **Doable** filter group with a single **Hide blocked tasks** checkbox. When enabled, any task row containing a WikiSync `.qc-not-started` marker — i.e., a sub-requirement (quest, skill level, item drop) the player hasn't started — is hidden. The group also shows a live count of blocked tasks so it's clear whether WikiSync has populated the markers yet; when zero, the count reads "none detected (needs WikiSync)" to distinguish "genuinely nothing blocked" from "WikiSync hasn't synced yet."

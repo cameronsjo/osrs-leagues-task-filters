@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         OSRS Wiki - Leagues Task Filters
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-14.2
+// @version      2026-05-14.3
 // @description  Filtering, search, and stats for Leagues task pages on the OSRS Wiki. Themed to match the wiki. Supports Demonic Pacts (VI), Raging Echoes (V), Trailblazer Reloaded (IV), and any future league with a /Tasks page. Honors the wiki's native area picker and hide-completed toggle.
-// @author       Cameron Johnson (cameronsjo). Original by https://oldschool.runescape.wiki/w/User:Loaf
+// @author       Cameron Sjo (cameronsjo). Original by https://oldschool.runescape.wiki/w/User:Loaf
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=runescape.wiki
 // @homepageURL  https://github.com/cameronsjo/osrs-leagues-task-filters
 // @supportURL   https://github.com/cameronsjo/osrs-leagues-task-filters/issues
@@ -42,6 +42,8 @@
     maxComp:  `${STORAGE_PREFIX}maxComp`,
     todo:        `${STORAGE_PREFIX}todo`,
     todoOnly:    `${STORAGE_PREFIX}todoOnly`,
+    wontDo:      `${STORAGE_PREFIX}wontDo`,
+    hideWontDo:  `${STORAGE_PREFIX}hideWontDo`,
     hideBlocked: `${STORAGE_PREFIX}hideBlocked`,
   };
 
@@ -79,8 +81,13 @@
   const FILTERED_ATTR = 'data-lf-filtered';
   const WIKI_AREA_NOTE_ID = 'lf-wiki-area-note';
 
-  // Hidden because of: f=filter, s=search, p=points, c=completion, w=wiki area mask, t=shortlist, b=blocked
-  const HIDE_REASONS = { FILTER: 'f', SEARCH: 's', POINTS: 'p', COMP: 'c', WIKI_AREA: 'w', SHORTLIST: 't', BLOCKED: 'b' };
+  // Hidden because of: f=filter, s=search, p=points, c=completion, w=wiki area mask, t=shortlist, b=blocked, x=won't do
+  const HIDE_REASONS = { FILTER: 'f', SEARCH: 's', POINTS: 'p', COMP: 'c', WIKI_AREA: 'w', SHORTLIST: 't', BLOCKED: 'b', WONT_DO: 'x' };
+
+  // Tri-state plan column. Click cycles 0 -> 1 -> 2 -> 0.
+  // 0 = untouched (no list), 1 = on todo, 2 = on won't-do.
+  const PLAN_GLYPHS = { 0: '\u2610', 1: '\u2713', 2: '\u2717' }; // ☐ ✓ ✗
+  const PLAN_LABELS = { 0: 'Untouched', 1: 'On my todo list', 2: 'Won\u2019t do' };
 
   // WikiSync injects `.qc-not-started` markers on sub-requirements (quests, skill levels,
   // item drops) the player hasn't started. A row containing one means the task cannot be
@@ -98,8 +105,12 @@
   let compMax         = 100;
   /** Task ids the user has shortlisted as a personal todo. Per-league via STORAGE_PREFIX. */
   let todoSet         = new Set();
+  /** Task ids the user has explicitly marked as "won't do". Disjoint from todoSet. */
+  let wontDoSet       = new Set();
   /** When true, only rows in todoSet are visible. */
   let todoOnly        = false;
+  /** When true, rows in wontDoSet are hidden. */
+  let hideWontDo      = false;
   /** When true, rows containing a WikiSync `.qc-not-started` marker are hidden. */
   let hideBlocked     = false;
 
@@ -146,8 +157,12 @@
     compMin       = Number(localStorage.getItem(LS.minComp)) || 0;
     compMax       = Number(localStorage.getItem(LS.maxComp)) || 100;
     todoSet       = new Set(safeJSON(localStorage.getItem(LS.todo), []));
+    wontDoSet     = new Set(safeJSON(localStorage.getItem(LS.wontDo), []));
     todoOnly      = localStorage.getItem(LS.todoOnly) === '1';
+    hideWontDo    = localStorage.getItem(LS.hideWontDo) === '1';
     hideBlocked   = localStorage.getItem(LS.hideBlocked) === '1';
+    // Defensive: if a task ever ended up in both sets (corruption), todo wins.
+    wontDoSet.forEach((id) => { if (todoSet.has(id)) wontDoSet.delete(id); });
   };
   const saveFilters  = () => localStorage.setItem(LS.filters, JSON.stringify([...activeFilters]));
   const saveSearch   = () => localStorage.setItem(LS.search, searchQuery);
@@ -159,8 +174,10 @@
     localStorage.setItem(LS.minComp, String(compMin));
     localStorage.setItem(LS.maxComp, String(compMax));
   };
-  const saveTodo       = () => localStorage.setItem(LS.todo, JSON.stringify([...todoSet]));
-  const saveTodoOnly   = () => localStorage.setItem(LS.todoOnly, todoOnly ? '1' : '0');
+  const saveTodo        = () => localStorage.setItem(LS.todo, JSON.stringify([...todoSet]));
+  const saveWontDo      = () => localStorage.setItem(LS.wontDo, JSON.stringify([...wontDoSet]));
+  const saveTodoOnly    = () => localStorage.setItem(LS.todoOnly, todoOnly ? '1' : '0');
+  const saveHideWontDo  = () => localStorage.setItem(LS.hideWontDo, hideWontDo ? '1' : '0');
   const saveHideBlocked = () => localStorage.setItem(LS.hideBlocked, hideBlocked ? '1' : '0');
 
   // ============================================================
@@ -172,6 +189,60 @@
     const $table = probe.closest('table');
     $table.attr('id', TABLE_ID);
     return $table;
+  };
+
+  /**
+   * Returns the plan state for a task id: 0=untouched, 1=todo, 2=won't-do.
+   * Sets are disjoint so this is unambiguous.
+   */
+  const getPlanState = (id) => (todoSet.has(id) ? 1 : wontDoSet.has(id) ? 2 : 0);
+
+  /**
+   * Cycles the plan state for a task: 0 → 1 → 2 → 0.
+   * Mutates todoSet/wontDoSet (caller persists), returns the new state.
+   */
+  const cyclePlanState = (id) => {
+    const next = (getPlanState(id) + 1) % 3;
+    todoSet.delete(id);
+    wontDoSet.delete(id);
+    if (next === 1) todoSet.add(id);
+    else if (next === 2) wontDoSet.add(id);
+    return next;
+  };
+
+  const planButtonHTML = (id) => {
+    const state = getPlanState(id);
+    return `<button type="button" class="lf-plan" data-lf-plan-id="${id}" data-state="${state}" aria-label="${PLAN_LABELS[state]}" title="Click to cycle: untouched \u2192 todo \u2192 won\u2019t do">${PLAN_GLYPHS[state]}</button>`;
+  };
+
+  /**
+   * Inserts the "Plan" column as the FIRST column on the table.
+   * Prepends a <th> to the thead row and a <td> to every body row. Done after
+   * parseTasks so positional cell access (cells.eq(0..5)) inside parseTasks is
+   * untouched.
+   */
+  const injectPlanColumn = ($table) => {
+    const $headerRow = $table.find('thead tr').first();
+    if ($headerRow.length) {
+      $headerRow.prepend('<th class="lf-plan-col" scope="col" title="Personal plan">Plan</th>');
+    }
+    $table.find('tbody > tr[data-taskid]').each((_, el) => {
+      const $row = $(el);
+      const id = $row.attr('data-taskid');
+      const state = getPlanState(id);
+      $row.prepend(`<td class="lf-plan-col" data-sort-value="${state}">${planButtonHTML(id)}</td>`);
+      if (state) $row.attr('data-lf-todo', String(state));
+    });
+  };
+
+  const applyPlanRowAttr = (id, state) => {
+    const $row = $(`#${TABLE_ID} tbody > tr[data-taskid="${id}"]`);
+    if (state === 0) $row.removeAttr('data-lf-todo');
+    else $row.attr('data-lf-todo', String(state));
+    const $cell = $row.children('td.lf-plan-col').first();
+    $cell.attr('data-sort-value', String(state));
+    const $btn = $cell.find('button.lf-plan');
+    $btn.attr('data-state', String(state)).attr('aria-label', PLAN_LABELS[state]).text(PLAN_GLYPHS[state]);
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -191,17 +262,8 @@
       const id = $row.attr('data-taskid');
       const cells = $row.children();
       const area = (cells.eq(0).attr('data-sort-value') || cells.eq(0).text().trim() || 'General').trim();
-      // Capture name text BEFORE injecting the shortlist checkbox so the checkbox markup
-      // doesn't pollute name or search haystack values.
       const name = cells.eq(1).text().trim();
       const description = cells.eq(2).text().trim();
-      const isOnList = todoSet.has(id);
-      cells.eq(1).prepend(
-        `<label class="lf-todo-row" title="Add to my todo list">` +
-          `<input type="checkbox" class="lf-todo-cb" data-lf-todo-id="${id}"${isOnList ? ' checked' : ''}/>` +
-        `</label>`
-      );
-      if (isOnList) $row.attr('data-lf-todo', '1');
       const { difficulty, isPact } = parseDifficulty($row);
       const skills = new Set();
       $row.find('[data-skill]').each((_, s) => {
@@ -284,6 +346,7 @@
     return pct >= compMin && pct <= compMax;
   };
   const matchesTodo = (task) => !todoOnly || todoSet.has(task.id);
+  const matchesWontDo = (task) => !hideWontDo || !wontDoSet.has(task.id);
   /**
    * Live-queries the row each call because WikiSync injects `.qc-not-started`
    * asynchronously after the page renders; caching at parse time would go stale.
@@ -305,7 +368,8 @@
       if (!matchesSearch(task)) reasons.push(HIDE_REASONS.SEARCH);
       if (!matchesPoints(task)) reasons.push(HIDE_REASONS.POINTS);
       if (!matchesComp(task))   reasons.push(HIDE_REASONS.COMP);
-      if (!matchesTodo(task))   reasons.push(HIDE_REASONS.SHORTLIST);
+      if (!matchesTodo(task))    reasons.push(HIDE_REASONS.SHORTLIST);
+      if (!matchesWontDo(task))  reasons.push(HIDE_REASONS.WONT_DO);
       if (!matchesBlocked(task)) reasons.push(HIDE_REASONS.BLOCKED);
       if (reasons.length === 0) {
         $row.removeAttr(FILTERED_ATTR).css('display', '');
@@ -327,25 +391,52 @@
   const cssVar = (name, fallback) => `var(${name}, ${fallback})`;
 
   const styles = `
+    /* Panel scoping + design tokens. Tokens are scoped to the panel so they
+       never leak into the wiki's stylesheet. */
     #${FILTERS_ID} {
-      border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
-      background: ${cssVar('--body-mid', '#d0bd97')};
-      color: ${cssVar('--text-color', '#000')};
+      --lf-border: ${cssVar('--wikitable-border', '#94866d')};
+      --lf-body-mid: ${cssVar('--body-mid', '#d0bd97')};
+      --lf-body-light: ${cssVar('--body-light', '#d8ccb4')};
+      --lf-header-bg: ${cssVar('--wikitable-header-bg', '#b8a282')};
+      --lf-text: ${cssVar('--text-color', '#000')};
+      --lf-link: ${cssVar('--link-color', '#936039')};
+      --lf-fine-line: rgba(255, 255, 255, 0.35);
+      --lf-shadow-hairline: 0 1px 0 rgba(0, 0, 0, 0.06);
+      --lf-transition: 120ms ease;
+      border: 1px solid var(--lf-border);
+      background: var(--lf-body-mid);
+      color: var(--lf-text);
       margin: 12px 0;
       font-family: inherit;
       font-size: 0.92em;
+      font-variant-numeric: tabular-nums;
+      box-shadow: inset 0 1px 0 var(--lf-fine-line), var(--lf-shadow-hairline);
     }
+    /* Header bar — league + search + clear-all. */
     #${FILTERS_ID} .lf-header {
-      background: ${cssVar('--wikitable-header-bg', '#b8a282')};
-      border-bottom: 1px solid ${cssVar('--wikitable-border', '#94866d')};
-      padding: 8px 12px;
+      background: var(--lf-header-bg);
+      border-bottom: 1px solid var(--lf-border);
+      padding: 9px 12px;
       display: flex;
       flex-wrap: wrap;
       gap: 10px 16px;
       align-items: center;
+      box-shadow: inset 0 1px 0 var(--lf-fine-line);
     }
-    #${FILTERS_ID} .lf-header strong { font-size: 1.05em; }
-    #${FILTERS_ID} .lf-body { padding: 10px 12px; }
+    #${FILTERS_ID} .lf-header strong {
+      font-size: 1.08em;
+      letter-spacing: -0.005em;
+      line-height: 1.2;
+    }
+    /* "Filters" eyebrow — quieter than the league name itself. */
+    #${FILTERS_ID} .lf-eyebrow {
+      font-size: 0.75em;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      opacity: 0.65;
+    }
+    #${FILTERS_ID} .lf-body { padding: 12px 12px 10px; }
     #${FILTERS_ID} .lf-row {
       display: flex;
       flex-wrap: wrap;
@@ -354,126 +445,261 @@
       margin-bottom: 8px;
     }
     #${FILTERS_ID} .lf-row:last-child { margin-bottom: 0; }
+    /* Group cards — the wiki's parchment look, with a hairline highlight. */
     #${FILTERS_ID} .lf-group {
-      background: ${cssVar('--body-light', '#d8ccb4')};
-      border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
-      padding: 0 10px 6px;
+      background: var(--lf-body-light);
+      border: 1px solid var(--lf-border);
+      padding: 0 10px 7px;
       min-width: 160px;
+      box-shadow: inset 0 1px 0 var(--lf-fine-line);
+      transition: border-color var(--lf-transition);
     }
+    /* Group headers — small uppercase eyebrows; editorial feel. */
     #${FILTERS_ID} .lf-group h4 {
       margin: 0 -10px 4px;
-      padding: 4px 10px;
-      background: ${cssVar('--wikitable-header-bg', '#b8a282')};
-      border-bottom: 1px solid ${cssVar('--wikitable-border', '#94866d')};
-      font-size: 0.95em;
-      font-weight: bold;
+      padding: 5px 10px;
+      background: var(--lf-header-bg);
+      border-bottom: 1px solid var(--lf-border);
+      font-size: 0.78em;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 6px;
+      box-shadow: inset 0 1px 0 var(--lf-fine-line);
     }
     #${FILTERS_ID} .lf-group h4 button {
-      font-size: 0.9em;
+      font-size: 1em;
       line-height: 1;
-      padding: 1px 6px;
+      padding: 2px 7px;
       cursor: pointer;
       background: transparent;
       border: 1px solid transparent;
       color: inherit;
       font-family: inherit;
+      letter-spacing: 0;
+      text-transform: none;
+      transition: background var(--lf-transition), border-color var(--lf-transition), color var(--lf-transition);
     }
     #${FILTERS_ID} .lf-group h4 button:hover {
-      background: ${cssVar('--body-light', '#d8ccb4')};
-      border-color: ${cssVar('--wikitable-border', '#94866d')};
+      background: var(--lf-body-light);
+      border-color: var(--lf-border);
+      color: var(--lf-link);
     }
-    #${FILTERS_ID} .lf-group-actions {
-      display: flex;
-      gap: 4px;
-    }
+    #${FILTERS_ID} .lf-group-actions { display: flex; gap: 4px; }
+    /* Option lists with a tasteful palette-matched scrollbar. */
     #${FILTERS_ID} .lf-options {
       display: flex;
       flex-direction: column;
       gap: 2px;
       max-height: 220px;
       overflow-y: auto;
-      padding-top: 4px;
+      padding: 5px 0 1px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--lf-border) transparent;
     }
+    #${FILTERS_ID} .lf-options::-webkit-scrollbar { width: 6px; }
+    #${FILTERS_ID} .lf-options::-webkit-scrollbar-thumb { background: var(--lf-border); }
+    #${FILTERS_ID} .lf-options::-webkit-scrollbar-track { background: transparent; }
     #${FILTERS_ID} label {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 5px;
       cursor: pointer;
       user-select: none;
       font-weight: normal;
       white-space: nowrap;
+      transition: color var(--lf-transition);
     }
-    #${FILTERS_ID} label:hover { color: ${cssVar('--link-color', '#936039')}; }
+    #${FILTERS_ID} label:hover { color: var(--lf-link); }
     #${FILTERS_ID} input[type="search"],
     #${FILTERS_ID} input[type="number"] {
-      padding: 4px 6px;
-      border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
-      background: ${cssVar('--body-light', '#d8ccb4')};
-      color: ${cssVar('--text-color', '#000')};
+      padding: 5px 7px;
+      border: 1px solid var(--lf-border);
+      background: var(--lf-body-light);
+      color: var(--lf-text);
       font-family: inherit;
+      transition: border-color var(--lf-transition), background var(--lf-transition), box-shadow var(--lf-transition);
     }
     #${FILTERS_ID} input[type="search"] { width: 280px; max-width: 100%; }
     #${FILTERS_ID} input[type="number"] { width: 70px; }
-    #${FILTERS_ID} .lf-range { display: flex; align-items: center; gap: 4px; }
+    #${FILTERS_ID} input[type="search"]:focus,
+    #${FILTERS_ID} input[type="number"]:focus {
+      outline: none;
+      border-color: var(--lf-link);
+      background: #fff;
+      box-shadow: inset 0 0 0 1px var(--lf-link);
+    }
+    #${FILTERS_ID} .lf-range {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    #${FILTERS_ID} .lf-range > span {
+      opacity: 0.7;
+      font-size: 0.9em;
+    }
     #${FILTERS_ID} .lf-actions { display: flex; gap: 6px; flex-wrap: wrap; }
     #${FILTERS_ID} .lf-actions button {
-      padding: 4px 10px;
+      padding: 5px 12px;
       cursor: pointer;
-      background: ${cssVar('--body-light', '#d8ccb4')};
-      border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
-      color: ${cssVar('--text-color', '#000')};
+      background: var(--lf-body-light);
+      border: 1px solid var(--lf-border);
+      color: var(--lf-text);
       font-family: inherit;
+      font-weight: 500;
+      transition: background var(--lf-transition), border-color var(--lf-transition), color var(--lf-transition);
     }
     #${FILTERS_ID} .lf-actions button:hover {
-      background: ${cssVar('--wikitable-header-bg', '#b8a282')};
+      background: var(--lf-header-bg);
+      color: var(--lf-link);
+    }
+    #${FILTERS_ID} .lf-actions button:active {
+      background: var(--lf-border);
+      color: #fff;
     }
     #${FILTERS_ID} .lf-actions button:disabled { opacity: 0.6; cursor: not-allowed; }
-    #${STATUS_ID} {
-      font-weight: bold;
-      padding: 6px 10px;
-      border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
-      background: ${cssVar('--body-light', '#d8ccb4')};
-      margin-top: 8px;
+    /* Universal focus-visible — accessibility win for keyboard users. */
+    #${FILTERS_ID} button:focus-visible,
+    #${FILTERS_ID} input:focus-visible {
+      outline: 2px solid var(--lf-link);
+      outline-offset: 1px;
     }
-    #${STATS_ID} { font-size: 0.9em; padding: 4px 0 6px; }
+    /* Status row + stats pills */
+    #${STATUS_ID} {
+      font-weight: 600;
+      padding: 7px 10px;
+      border: 1px solid var(--lf-border);
+      background: var(--lf-body-light);
+      margin-top: 8px;
+      box-shadow: inset 0 1px 0 var(--lf-fine-line);
+      letter-spacing: 0.005em;
+    }
+    #${STATS_ID} { font-size: 0.9em; padding: 4px 0 8px; }
     #${STATS_ID} .lf-stat-pill {
       display: inline-block;
-      padding: 2px 8px;
+      padding: 3px 9px;
       margin-right: 6px;
-      background: ${cssVar('--body-light', '#d8ccb4')};
-      border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
+      background: var(--lf-body-light);
+      border: 1px solid var(--lf-border);
+      box-shadow: inset 0 1px 0 var(--lf-fine-line);
     }
+    /* Wiki-area note — flagged left border so it reads as dynamic info. */
     #${WIKI_AREA_NOTE_ID} {
-      background: ${cssVar('--body-light', '#d8ccb4')};
-      border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
-      padding: 4px 8px;
+      background: var(--lf-body-light);
+      border: 1px solid var(--lf-border);
+      border-left: 3px solid var(--lf-link);
+      padding: 6px 10px;
       margin: 0 0 8px;
     }
     .lf-tag {
       display: inline-block;
-      padding: 1px 6px;
+      padding: 2px 7px;
       font-size: 0.78em;
-      background: ${cssVar('--body-light', '#d8ccb4')};
-      border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      background: var(--lf-body-light);
+      border: 1px solid var(--lf-border);
     }
-    .lf-todo-row {
+    /* ─── Plan column on the leagues table ─────────────────────────── */
+    #${TABLE_ID} th.lf-plan-col,
+    #${TABLE_ID} td.lf-plan-col {
+      width: 44px;
+      min-width: 44px;
+      text-align: center;
+      padding: 4px 2px;
+    }
+    #${TABLE_ID} th.lf-plan-col {
+      font-size: 0.75em;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    button.lf-plan {
       display: inline-flex;
       align-items: center;
-      margin-right: 6px;
-      vertical-align: middle;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      font-family: inherit;
+      font-size: 16px;
+      line-height: 1;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--lf-text, ${cssVar('--text-color', '#000')});
+      cursor: pointer;
+      transition: background var(--lf-transition, 120ms ease), border-color var(--lf-transition, 120ms ease), color var(--lf-transition, 120ms ease), transform var(--lf-transition, 120ms ease);
     }
-    .lf-todo-row input[type="checkbox"] { cursor: pointer; }
+    button.lf-plan:hover {
+      background: ${cssVar('--body-light', '#d8ccb4')};
+      border-color: ${cssVar('--wikitable-border', '#94866d')};
+    }
+    button.lf-plan:active { transform: scale(0.92); }
+    button.lf-plan:focus-visible {
+      outline: 2px solid ${cssVar('--link-color', '#936039')};
+      outline-offset: 1px;
+    }
+    button.lf-plan[data-state="0"] { opacity: 0.35; }
+    button.lf-plan[data-state="0"]:hover { opacity: 0.7; }
+    button.lf-plan[data-state="1"] {
+      color: ${cssVar('--link-color', '#936039')};
+      font-weight: 700;
+      opacity: 1;
+    }
+    button.lf-plan[data-state="2"] {
+      color: ${cssVar('--text-color', '#000')};
+      opacity: 0.55;
+    }
+    /* Row accents — todo: warm left rail. Won't-do: fade the content. */
     tr[data-lf-todo="1"] {
       box-shadow: inset 4px 0 0 ${cssVar('--link-color', '#936039')};
     }
-    #${FILTERS_ID} [data-lf-group="todo"] { min-width: 180px; }
-    #${FILTERS_ID} #lf-todo-count { font-size: 0.8em; opacity: 0.7; padding-top: 2px; }
+    tr[data-lf-todo="2"] > td:not(.lf-plan-col) {
+      opacity: 0.5;
+    }
+    tr[data-lf-todo="2"]:hover > td:not(.lf-plan-col) {
+      opacity: 0.85;
+    }
+    /* Group min-widths so the row breaks nicely on narrow viewports. */
+    #${FILTERS_ID} [data-lf-group="todo"] { min-width: 220px; }
     #${FILTERS_ID} [data-lf-group="doable"] { min-width: 200px; }
-    #${FILTERS_ID} #lf-blocked-count { font-size: 0.8em; opacity: 0.7; padding-top: 2px; }
+    #${FILTERS_ID} #lf-todo-count,
+    #${FILTERS_ID} #lf-blocked-count {
+      font-size: 0.8em;
+      opacity: 0.7;
+      padding-top: 3px;
+      letter-spacing: 0.02em;
+    }
+    /* Export toast — sits inside the todo group, in-flow, no overlay chrome. */
+    #${FILTERS_ID} .lf-toast { padding-top: 4px; }
+    #${FILTERS_ID} .lf-toast-msg {
+      font-size: 0.82em;
+      padding: 3px 7px;
+      border: 1px solid var(--lf-border);
+      background: var(--lf-header-bg);
+      display: inline-block;
+      letter-spacing: 0.01em;
+    }
+    #${FILTERS_ID} .lf-toast-msg[data-kind="manual"] {
+      background: var(--lf-body-mid);
+      border-color: var(--lf-link);
+    }
+    #${FILTERS_ID} .lf-toast-fallback {
+      display: block;
+      width: 100%;
+      min-height: 80px;
+      margin-top: 4px;
+      padding: 5px 7px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78em;
+      background: #fff;
+      border: 1px solid var(--lf-border);
+      color: var(--lf-text);
+      resize: vertical;
+    }
   `;
 
   const injectStyles = () => {
@@ -515,7 +741,8 @@
     const html = `
       <div id="${FILTERS_ID}">
         <div class="lf-header">
-          <strong>${leagueLabel} — Filters</strong>
+          <strong>${leagueLabel}</strong>
+          <span class="lf-eyebrow">Filters</span>
           <span class="lf-tag">${tasks.size} tasks</span>
           <input id="${SEARCH_ID}" type="search" placeholder="Search task name or description (press / to focus, Esc to clear)" value="${searchQuery.replace(/"/g, '&quot;')}" style="flex:1; min-width:200px;"/>
           <div class="lf-actions">
@@ -531,10 +758,12 @@
             ${groupOptions('Skill',        dims.skills,       'skill')}
             ${groupOptions('Status',       new Set(miscOpts), 'misc', (m) => ({ complete: 'Completed', incomplete: 'Incomplete' }[m] || m))}
             <div class="lf-group" data-lf-group="todo">
-              <h4>Todo list <span class="lf-group-actions"><button type="button" data-lf-clear-todo title="Empty the todo list">Clear list</button></span></h4>
+              <h4>Todo list <span class="lf-group-actions"><button type="button" data-lf-export-md title="Copy your todo list as markdown">Export</button><button type="button" data-lf-clear-todo title="Clear todo and won\u2019t-do lists">Clear</button></span></h4>
               <div class="lf-options">
-                <label for="lf-todo-only"><input type="checkbox" id="lf-todo-only" ${todoOnly ? 'checked' : ''}/> Show only marked</label>
+                <label for="lf-todo-only"><input type="checkbox" id="lf-todo-only" ${todoOnly ? 'checked' : ''}/> Show only my todo list</label>
+                <label for="lf-hide-wontdo"><input type="checkbox" id="lf-hide-wontdo" ${hideWontDo ? 'checked' : ''}/> Hide won\u2019t-do tasks</label>
                 <div id="lf-todo-count"></div>
+                <div id="lf-export-toast" class="lf-toast" aria-live="polite"></div>
               </div>
             </div>
             <div class="lf-group" data-lf-group="doable">
@@ -570,10 +799,86 @@
     $table.before(html);
   };
 
+  /**
+   * Builds a markdown checklist of the user's todo list, grouped by area, sorted
+   * by difficulty within each area. Returns "" when the list is empty.
+   */
+  const buildTodoMarkdown = () => {
+    if (todoSet.size === 0) return '';
+    const DIFF_ORDER = { Easy: 0, Medium: 1, Hard: 2, Elite: 3, Master: 4, '': 5 };
+    const byArea = new Map();
+    let totalPts = 0;
+    todoSet.forEach((id) => {
+      const t = tasks.get(id);
+      if (!t) return;
+      const list = byArea.get(t.area) || [];
+      list.push(t);
+      byArea.set(t.area, list);
+      totalPts += t.points;
+    });
+    const today = new Date().toISOString().slice(0, 10);
+    const leagueLabel = LEAGUE_KEY.replace(/_/g, ' ');
+    const lines = [
+      `# ${leagueLabel} — Todo`,
+      `*Generated ${today} · ${todoSet.size} task${todoSet.size === 1 ? '' : 's'} · ${totalPts} pts*`,
+      '',
+    ];
+    [...byArea.keys()].sort((a, b) => a.localeCompare(b)).forEach((area) => {
+      lines.push(`## ${area}`);
+      byArea.get(area)
+        .sort((a, b) => (DIFF_ORDER[a.difficulty] ?? 5) - (DIFF_ORDER[b.difficulty] ?? 5) || a.name.localeCompare(b.name))
+        .forEach((t) => {
+          const diff = t.difficulty ? `**${t.difficulty}** · ` : '';
+          const pts = t.points ? `${t.points} pts · ` : '';
+          lines.push(`- [ ] ${diff}${pts}${t.name}`);
+        });
+      lines.push('');
+    });
+    return lines.join('\n').trimEnd() + '\n';
+  };
+
+  const fallbackCopy = (text) => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  let exportToastTimer = null;
+  const showExportToast = (msg, kind = 'ok', failureBody = null) => {
+    const $toast = $('#lf-export-toast');
+    if (!$toast.length) return;
+    clearTimeout(exportToastTimer);
+    if (failureBody) {
+      const safe = failureBody.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      $toast.html(`<div class="lf-toast-msg" data-kind="${kind}">${msg}</div><textarea readonly class="lf-toast-fallback">${safe}</textarea>`);
+      // Pre-select for easy Ctrl+C.
+      const ta = $toast.find('textarea')[0];
+      if (ta) { ta.focus(); ta.select(); }
+    } else {
+      $toast.html(`<div class="lf-toast-msg" data-kind="${kind}">${msg}</div>`);
+      exportToastTimer = setTimeout(() => $toast.empty(), 2400);
+    }
+  };
+
   const updateTodoCount = () => {
     const $el = $('#lf-todo-count');
     if (!$el.length) return;
-    $el.text(`${todoSet.size} marked`);
+    const todo = todoSet.size;
+    const wont = wontDoSet.size;
+    if (todo === 0 && wont === 0) {
+      $el.text('nothing on your plan yet');
+    } else {
+      $el.text(`${todo} todo \u00b7 ${wont} won\u2019t-do`);
+    }
   };
 
   const updateBlockedCount = (count) => {
@@ -660,43 +965,54 @@
       searchQuery = '';
       pointsMin = 0; pointsMax = Infinity;
       compMin = 0; compMax = 100;
-      // Intentionally do NOT clear todoSet — the shortlist is curated, not a transient
-      // filter. We only turn off the "show only marked" toggle.
+      // Intentionally do NOT clear todoSet/wontDoSet — those are curated work, not
+      // transient filter state. We only turn off the visibility toggles.
       todoOnly = false;
+      hideWontDo = false;
       hideBlocked = false;
-      saveFilters(); saveSearch(); savePoints(); saveComp(); saveTodoOnly(); saveHideBlocked();
+      saveFilters(); saveSearch(); savePoints(); saveComp();
+      saveTodoOnly(); saveHideWontDo(); saveHideBlocked();
       $(`#${FILTERS_ID} input[data-lf-kind]`).prop('checked', false);
       $(`#${SEARCH_ID}`).val('');
       $('#lf-pts-min').val(0); $('#lf-pts-max').val(dims.pointsObserved.max);
       $('#lf-comp-min').val(0); $('#lf-comp-max').val(100);
       $('#lf-todo-only').prop('checked', false);
+      $('#lf-hide-wontdo').prop('checked', false);
       $('#lf-hide-blocked').prop('checked', false);
       applyFilters();
     });
 
-    // Per-row todo checkbox — delegated on the leagues table so it survives any
-    // re-render the wiki might trigger.
-    $(`#${TABLE_ID}`).on('change', 'input.lf-todo-cb', function () {
-      const id = $(this).attr('data-lf-todo-id');
-      const $row = $(this).closest('tr');
-      if (this.checked) {
-        todoSet.add(id);
-        $row.attr('data-lf-todo', '1');
-      } else {
-        todoSet.delete(id);
-        $row.removeAttr('data-lf-todo');
-      }
-      saveTodo();
-      applyFilters();
-    });
-
-    // Stop the checkbox label from bubbling click into any wiki-row handler
-    // (the wiki itself doesn't currently bind row clicks, but be defensive).
-    $(`#${TABLE_ID}`).on('click', '.lf-todo-row', (e) => e.stopPropagation());
+    // Per-row plan cycle button. The wiki binds direct click handlers on each
+    // <tr> (WikiSync's row-toggle feature) that call event.stopPropagation()
+    // during bubble — so a jQuery-delegated handler on the table never sees
+    // the event. We attach in CAPTURE phase at the table level so we fire
+    // BEFORE the bubble path reaches the TR's interception. stopPropagation()
+    // here also keeps the click from accidentally triggering the row toggle.
+    const tableEl = document.getElementById(TABLE_ID);
+    if (tableEl) {
+      tableEl.addEventListener('click', (e) => {
+        const btn = e.target && e.target.closest && e.target.closest('button.lf-plan');
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const id = btn.getAttribute('data-lf-plan-id');
+        const next = cyclePlanState(id);
+        saveTodo();
+        saveWontDo();
+        applyPlanRowAttr(id, next);
+        applyFilters();
+      }, true);
+    }
 
     $('#lf-todo-only').on('change', function () {
       todoOnly = this.checked;
       saveTodoOnly();
+      applyFilters();
+    });
+
+    $('#lf-hide-wontdo').on('change', function () {
+      hideWontDo = this.checked;
+      saveHideWontDo();
       applyFilters();
     });
 
@@ -707,13 +1023,37 @@
     });
 
     $(`#${FILTERS_ID}`).on('click', '[data-lf-clear-todo]', () => {
-      if (todoSet.size === 0) return;
-      if (!window.confirm(`Empty your todo list (${todoSet.size} marked)?`)) return;
+      const total = todoSet.size + wontDoSet.size;
+      if (total === 0) return;
+      if (!window.confirm(`Clear all personal markers (${todoSet.size} todo + ${wontDoSet.size} won\u2019t-do)?`)) return;
       todoSet.clear();
+      wontDoSet.clear();
       saveTodo();
-      $(`#${TABLE_ID} input.lf-todo-cb`).prop('checked', false);
-      $(`#${TABLE_ID} tr[data-lf-todo]`).removeAttr('data-lf-todo');
+      saveWontDo();
+      $(`#${TABLE_ID} tr[data-lf-todo]`).each(function () {
+        const id = $(this).attr('data-taskid');
+        applyPlanRowAttr(id, 0);
+      });
       applyFilters();
+    });
+
+    $(`#${FILTERS_ID}`).on('click', '[data-lf-export-md]', async () => {
+      const md = buildTodoMarkdown();
+      if (!md) {
+        showExportToast('Nothing on your todo list yet');
+        return;
+      }
+      let ok = false;
+      try {
+        await navigator.clipboard.writeText(md);
+        ok = true;
+      } catch (err) {
+        // Clipboard write can fail under odd permission/CSP shapes — fall back to a
+        // selectable textarea so the user can ctrl-c manually.
+        ok = fallbackCopy(md);
+      }
+      const n = (md.match(/^- \[ \]/gm) || []).length;
+      showExportToast(ok ? `Copied ${n} task${n === 1 ? '' : 's'} as markdown` : `Couldn\u2019t auto-copy \u2014 select the text below`, ok ? 'ok' : 'manual', ok ? null : md);
     });
 
     let searchDebounce;
@@ -827,6 +1167,7 @@
     try {
       loadState();
       parseTasks($table);
+      injectPlanColumn($table);
       injectStyles();
       // Hide the noisy default row counter (we render our own status), but keep the
       // wiki's native "hide completed" toggle and area picker — our filters honor them.
@@ -853,7 +1194,9 @@
       wikiHiddenAreas: [...wikiHiddenAreas],
       activeFilters: [...activeFilters],
       todo: todoSet.size,
+      wontDo: wontDoSet.size,
       todoOnly,
+      hideWontDo,
       hideBlocked,
       panelInDom: !!document.getElementById(FILTERS_ID),
     }),
