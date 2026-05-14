@@ -2,6 +2,16 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
+## [2026-05-14.2] — hide blocked tasks (WikiSync qc-not-started)
+
+Added a **Doable** filter group with a single **Hide blocked tasks** checkbox. When enabled, any task row containing a WikiSync `.qc-not-started` marker — i.e., a sub-requirement (quest, skill level, item drop) the player hasn't started — is hidden. The group also shows a live count of blocked tasks so it's clear whether WikiSync has populated the markers yet; when zero, the count reads "none detected (needs WikiSync)" to distinguish "genuinely nothing blocked" from "WikiSync hasn't synced yet."
+
+Integrates the spirit of [zuccc's "Hide 10 point or uncompletable tasks" userscript](https://greasyfork.org/) without bundling its `<=10 pts` removal (our existing points-range filter already covers that). Unlike the source script we don't need a MutationObserver — the existing WikiSync XHR hook (`/runelite/player`) already re-runs `applyFilters` once per sync, by which time `qc-not-started` markers are in the DOM.
+
+Implemented as a new `HIDE_REASONS.BLOCKED` reason. The matcher live-queries the DOM each pass (caching at parse time would go stale because WikiSync injects asynchronously). The toggle is treated as a transient filter — "Clear all filters" turns it off.
+
+`window.LeaguesFilters.state()` now exposes `hideBlocked`.
+
 ## [2026-05-14.1] — personal todo list
 
 Added a per-row **todo** checkbox and a matching **Todo list** filter group. Tick the checkbox prefixed inside any task's name cell to add the task to a personal shortlist; flip "Show only marked" in the Todo group to hide everything else. Marked rows get a subtle left-border accent in the wiki link color so they're easy to scan at a glance. The list is stored under `lf:<League_Key>:todo` so each league has its own — your Demonic Pacts shortlist and Trailblazer shortlist don't share state.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSRS Wiki - Leagues Task Filters
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-14.1
+// @version      2026-05-14.2
 // @description  Filtering, search, and stats for Leagues task pages on the OSRS Wiki. Themed to match the wiki. Supports Demonic Pacts (VI), Raging Echoes (V), Trailblazer Reloaded (IV), and any future league with a /Tasks page. Honors the wiki's native area picker and hide-completed toggle.
 // @author       Cameron Johnson (cameronsjo). Original by https://oldschool.runescape.wiki/w/User:Loaf
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=runescape.wiki
@@ -40,8 +40,9 @@
     maxPts:   `${STORAGE_PREFIX}maxPts`,
     minComp:  `${STORAGE_PREFIX}minComp`,
     maxComp:  `${STORAGE_PREFIX}maxComp`,
-    todo:     `${STORAGE_PREFIX}todo`,
-    todoOnly: `${STORAGE_PREFIX}todoOnly`,
+    todo:        `${STORAGE_PREFIX}todo`,
+    todoOnly:    `${STORAGE_PREFIX}todoOnly`,
+    hideBlocked: `${STORAGE_PREFIX}hideBlocked`,
   };
 
   // Difficulty images use either the DPL "pact tasks" set OR the legacy
@@ -78,8 +79,13 @@
   const FILTERED_ATTR = 'data-lf-filtered';
   const WIKI_AREA_NOTE_ID = 'lf-wiki-area-note';
 
-  // Hidden because of: f=filter, s=search, p=points, c=completion, w=wiki area mask, t=shortlist
-  const HIDE_REASONS = { FILTER: 'f', SEARCH: 's', POINTS: 'p', COMP: 'c', WIKI_AREA: 'w', SHORTLIST: 't' };
+  // Hidden because of: f=filter, s=search, p=points, c=completion, w=wiki area mask, t=shortlist, b=blocked
+  const HIDE_REASONS = { FILTER: 'f', SEARCH: 's', POINTS: 'p', COMP: 'c', WIKI_AREA: 'w', SHORTLIST: 't', BLOCKED: 'b' };
+
+  // WikiSync injects `.qc-not-started` markers on sub-requirements (quests, skill levels,
+  // item drops) the player hasn't started. A row containing one means the task cannot be
+  // completed in the player's current account state.
+  const BLOCKED_MARKER_SELECTOR = '.qc-not-started';
 
   // ============================================================
   // STATE
@@ -94,6 +100,8 @@
   let todoSet         = new Set();
   /** When true, only rows in todoSet are visible. */
   let todoOnly        = false;
+  /** When true, rows containing a WikiSync `.qc-not-started` marker are hidden. */
+  let hideBlocked     = false;
 
   /** @type {Map<string, TaskMeta>} */
   const tasks = new Map();
@@ -139,6 +147,7 @@
     compMax       = Number(localStorage.getItem(LS.maxComp)) || 100;
     todoSet       = new Set(safeJSON(localStorage.getItem(LS.todo), []));
     todoOnly      = localStorage.getItem(LS.todoOnly) === '1';
+    hideBlocked   = localStorage.getItem(LS.hideBlocked) === '1';
   };
   const saveFilters  = () => localStorage.setItem(LS.filters, JSON.stringify([...activeFilters]));
   const saveSearch   = () => localStorage.setItem(LS.search, searchQuery);
@@ -150,8 +159,9 @@
     localStorage.setItem(LS.minComp, String(compMin));
     localStorage.setItem(LS.maxComp, String(compMax));
   };
-  const saveTodo     = () => localStorage.setItem(LS.todo, JSON.stringify([...todoSet]));
-  const saveTodoOnly = () => localStorage.setItem(LS.todoOnly, todoOnly ? '1' : '0');
+  const saveTodo       = () => localStorage.setItem(LS.todo, JSON.stringify([...todoSet]));
+  const saveTodoOnly   = () => localStorage.setItem(LS.todoOnly, todoOnly ? '1' : '0');
+  const saveHideBlocked = () => localStorage.setItem(LS.hideBlocked, hideBlocked ? '1' : '0');
 
   // ============================================================
   // TABLE PARSING
@@ -274,15 +284,21 @@
     return pct >= compMin && pct <= compMax;
   };
   const matchesTodo = (task) => !todoOnly || todoSet.has(task.id);
+  /**
+   * Live-queries the row each call because WikiSync injects `.qc-not-started`
+   * asynchronously after the page renders; caching at parse time would go stale.
+   */
+  const matchesBlocked = (task) => !hideBlocked || $(task.row).find(BLOCKED_MARKER_SELECTOR).length === 0;
 
   const applyFilters = () => {
     refreshWikiHiddenAreas();
-    let visible = 0, visiblePts = 0, totalPts = 0, completedPts = 0;
+    let visible = 0, visiblePts = 0, totalPts = 0, completedPts = 0, blockedCount = 0;
     tasks.forEach((task) => {
       totalPts += task.points;
       const $row = $(task.row);
       const isCompleted = $row.hasClass('wikisync-completed') || $row.find('.wikisync-completed').length > 0;
       if (isCompleted) completedPts += task.points;
+      if ($row.find(BLOCKED_MARKER_SELECTOR).length > 0) blockedCount += 1;
       const reasons = [];
       if (wikiHiddenAreas.has(task.area)) reasons.push(HIDE_REASONS.WIKI_AREA);
       if (!matchesActive(task)) reasons.push(HIDE_REASONS.FILTER);
@@ -290,6 +306,7 @@
       if (!matchesPoints(task)) reasons.push(HIDE_REASONS.POINTS);
       if (!matchesComp(task))   reasons.push(HIDE_REASONS.COMP);
       if (!matchesTodo(task))   reasons.push(HIDE_REASONS.SHORTLIST);
+      if (!matchesBlocked(task)) reasons.push(HIDE_REASONS.BLOCKED);
       if (reasons.length === 0) {
         $row.removeAttr(FILTERED_ATTR).css('display', '');
         visible += 1;
@@ -301,6 +318,7 @@
     updateStatus(visible, visiblePts, totalPts, completedPts);
     updateWikiAreaNote();
     updateTodoCount();
+    updateBlockedCount(blockedCount);
   };
 
   // ============================================================
@@ -454,6 +472,8 @@
     }
     #${FILTERS_ID} [data-lf-group="todo"] { min-width: 180px; }
     #${FILTERS_ID} #lf-todo-count { font-size: 0.8em; opacity: 0.7; padding-top: 2px; }
+    #${FILTERS_ID} [data-lf-group="doable"] { min-width: 200px; }
+    #${FILTERS_ID} #lf-blocked-count { font-size: 0.8em; opacity: 0.7; padding-top: 2px; }
   `;
 
   const injectStyles = () => {
@@ -517,6 +537,13 @@
                 <div id="lf-todo-count"></div>
               </div>
             </div>
+            <div class="lf-group" data-lf-group="doable">
+              <h4>Doable</h4>
+              <div class="lf-options">
+                <label for="lf-hide-blocked" title="Hide tasks whose requirements (quests, skill levels, etc.) the player hasn't started yet — uses WikiSync's qc-not-started markers."><input type="checkbox" id="lf-hide-blocked" ${hideBlocked ? 'checked' : ''}/> Hide blocked tasks</label>
+                <div id="lf-blocked-count"></div>
+              </div>
+            </div>
             <div class="lf-group">
               <h4>Points <button type="button" data-lf-reset="points">×</button></h4>
               <div class="lf-range">
@@ -547,6 +574,14 @@
     const $el = $('#lf-todo-count');
     if (!$el.length) return;
     $el.text(`${todoSet.size} marked`);
+  };
+
+  const updateBlockedCount = (count) => {
+    const $el = $('#lf-blocked-count');
+    if (!$el.length) return;
+    // 0 = either no WikiSync data yet OR genuinely nothing blocked. Surface the distinction
+    // gently — most users will see the WikiSync case until they sync.
+    $el.text(count > 0 ? `${count} blocked` : 'none detected (needs WikiSync)');
   };
 
   const updateWikiAreaNote = () => {
@@ -628,12 +663,14 @@
       // Intentionally do NOT clear todoSet — the shortlist is curated, not a transient
       // filter. We only turn off the "show only marked" toggle.
       todoOnly = false;
-      saveFilters(); saveSearch(); savePoints(); saveComp(); saveTodoOnly();
+      hideBlocked = false;
+      saveFilters(); saveSearch(); savePoints(); saveComp(); saveTodoOnly(); saveHideBlocked();
       $(`#${FILTERS_ID} input[data-lf-kind]`).prop('checked', false);
       $(`#${SEARCH_ID}`).val('');
       $('#lf-pts-min').val(0); $('#lf-pts-max').val(dims.pointsObserved.max);
       $('#lf-comp-min').val(0); $('#lf-comp-max').val(100);
       $('#lf-todo-only').prop('checked', false);
+      $('#lf-hide-blocked').prop('checked', false);
       applyFilters();
     });
 
@@ -660,6 +697,12 @@
     $('#lf-todo-only').on('change', function () {
       todoOnly = this.checked;
       saveTodoOnly();
+      applyFilters();
+    });
+
+    $('#lf-hide-blocked').on('change', function () {
+      hideBlocked = this.checked;
+      saveHideBlocked();
       applyFilters();
     });
 
@@ -811,6 +854,7 @@
       activeFilters: [...activeFilters],
       todo: todoSet.size,
       todoOnly,
+      hideBlocked,
       panelInDom: !!document.getElementById(FILTERS_ID),
     }),
   };
