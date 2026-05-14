@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSRS Wiki - Leagues Task Filters
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-14.3
+// @version      2026-05-14.4
 // @description  Filtering, search, and stats for Leagues task pages on the OSRS Wiki. Themed to match the wiki. Supports Demonic Pacts (VI), Raging Echoes (V), Trailblazer Reloaded (IV), and any future league with a /Tasks page. Honors the wiki's native area picker and hide-completed toggle.
 // @author       Cameron Sjo (cameronsjo). Original by https://oldschool.runescape.wiki/w/User:Loaf
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=runescape.wiki
@@ -216,21 +216,22 @@
   };
 
   /**
-   * Inserts the "Plan" column as the FIRST column on the table.
-   * Prepends a <th> to the thead row and a <td> to every body row. Done after
-   * parseTasks so positional cell access (cells.eq(0..5)) inside parseTasks is
-   * untouched.
+   * Appends the "Plan" column as the LAST column on the table. Front-positioning
+   * made the column render wide on the wiki because of how the wiki sizes its
+   * first column. Appending lets natural column flow take over so it sits flush
+   * at the end. Positional cell access in parseTasks (cells.eq(0..5)) is
+   * unaffected either way because injectPlanColumn runs after parseTasks.
    */
   const injectPlanColumn = ($table) => {
     const $headerRow = $table.find('thead tr').first();
     if ($headerRow.length) {
-      $headerRow.prepend('<th class="lf-plan-col" scope="col" title="Personal plan">Plan</th>');
+      $headerRow.append('<th class="lf-plan-col" scope="col" title="Personal plan">Plan</th>');
     }
     $table.find('tbody > tr[data-taskid]').each((_, el) => {
       const $row = $(el);
       const id = $row.attr('data-taskid');
       const state = getPlanState(id);
-      $row.prepend(`<td class="lf-plan-col" data-sort-value="${state}">${planButtonHTML(id)}</td>`);
+      $row.append(`<td class="lf-plan-col" data-sort-value="${state}">${planButtonHTML(id)}</td>`);
       if (state) $row.attr('data-lf-todo', String(state));
     });
   };

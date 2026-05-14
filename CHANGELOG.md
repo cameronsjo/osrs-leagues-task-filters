@@ -2,6 +2,10 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
+## [2026-05-14.4] — move Plan column to the end
+
+Front-positioning the Plan column made it render wider than expected because of how the wiki sizes its first column. Appending it at the end lets natural column flow take over and the column sits flush at its declared 44px width. No behavior change — just `prepend` → `append` for the `<th>` and per-row `<td>`. Positional cell access in `parseTasks` is unaffected because the column injection runs after parsing.
+
 ## [2026-05-14.3] — tri-state Plan column, won't-do, markdown export, panel polish
 
 The per-row todo checkbox grew up. It's now a **Plan** column inserted as the first column of the leagues table, holding a click-cycle button that walks each task through three states: **☐ untouched → ✓ todo → ✗ won't do → ☐**. Won't-do rows fade their content to 50% so they read as "deprecated" without needing a new color; todo rows keep the warm left-rail accent. The column has a `data-sort-value` so the wiki's built-in sort handles it; sorting by Plan groups your curated tasks at the top or bottom of the table.
