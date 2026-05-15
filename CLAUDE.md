@@ -33,6 +33,15 @@ These are not derivable from the code; they're environmental.
 - **`window.jQuery` from the sandbox is a `Proxy`.** It's readable but not always *callable* across contexts — hence we `@require` jQuery to load it directly into the sandbox so `$()` is a real callable function in the same context as the script. The existing `if (!window.jQuery) return` guard logs a warning and bails cleanly if the require ever fails.
 - **`@match` over `@include`.** Stricter, better-supported. `@match` does not allow `*` mid-path, so new leagues need a metadata bump (no `*_League/Tasks*` wildcard).
 
+## Per-row event handlers
+
+The wiki binds direct click handlers on every `<tr data-taskid>` (WikiSync's row-toggle feature) that call `event.stopPropagation()` during bubble. **jQuery's `.on('click', selector, handler)` delegation at the table level fails silently** — the click reaches the target but never bubbles back up. Two ways out:
+
+- **Native `addEventListener('click', handler, true)`** on the table — capture phase fires on the way *down*, before the TR can intercept. Pair with `e.stopPropagation()` inside the handler to keep the row's own click handler from firing too.
+- **`change` event on form controls** — `change` events from `<input type="checkbox">` bubble independently of `click`, so they're unaffected by the row's click `stopPropagation`. Capture phase still recommended for consistency.
+
+See `docs/field-reports/capture-phase-vs-row-stoppropagation.md` for the full debugging arc.
+
 ## Verification
 
 There's no test suite. Verification is via Playwright against the live wiki:
@@ -69,3 +78,10 @@ The script logs `[Leagues Filters] script loaded` → `boot — url: ...` → `f
 1. Add a `@match https://oldschool.runescape.wiki/w/<New_League>_League/Tasks*` line to the metadata block.
 2. Bump `@version`, update CHANGELOG, regenerate min.
 3. The script auto-detects the league from the URL pathname, so no other code changes — assuming the new league reuses the standard `[data-taskid]` table structure (check by visiting the page and confirming rows have `data-taskid`).
+
+## Field reports
+
+Longer narrative writeups of past sessions live in `docs/field-reports/`. Check these first if your work overlaps:
+
+- `capture-phase-vs-row-stoppropagation.md` — why event handlers on rows silently disappear, and the capture-phase fix.
+- `tri-state-to-binary-collapse.md` — design conversation about why the Plan column went from tri-state (todo/won't-do/untouched) to binary (todo/untouched). Useful before adding curation states.
