@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSRS Wiki - Leagues Task Filters
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-14.4
+// @version      2026-05-14.5
 // @description  Filtering, search, and stats for Leagues task pages on the OSRS Wiki. Themed to match the wiki. Supports Demonic Pacts (VI), Raging Echoes (V), Trailblazer Reloaded (IV), and any future league with a /Tasks page. Honors the wiki's native area picker and hide-completed toggle.
 // @author       Cameron Sjo (cameronsjo). Original by https://oldschool.runescape.wiki/w/User:Loaf
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=runescape.wiki
@@ -394,6 +394,18 @@
   const styles = `
     /* Panel scoping + design tokens. Tokens are scoped to the panel so they
        never leak into the wiki's stylesheet. */
+    #${FILTERS_ID}, #${TABLE_ID} {
+      /* Plan-state palette — Okabe-Ito-derived, colorblind-safe.
+         Distinct in hue AND lightness so the pair holds up under any form of
+         color vision deficiency. Defined on both the panel and the table so
+         the row tints below can reference them. */
+      --lf-plan-go: #007a5e;
+      --lf-plan-skip: #b85e1a;
+      --lf-plan-go-bg: rgba(0, 122, 94, 0.16);
+      --lf-plan-go-bg-hover: rgba(0, 122, 94, 0.24);
+      --lf-plan-skip-bg: rgba(184, 94, 26, 0.18);
+      --lf-plan-skip-bg-hover: rgba(184, 94, 26, 0.28);
+    }
     #${FILTERS_ID} {
       --lf-border: ${cssVar('--wikitable-border', '#94866d')};
       --lf-body-mid: ${cssVar('--body-mid', '#d0bd97')};
@@ -646,23 +658,29 @@
     button.lf-plan[data-state="0"] { opacity: 0.35; }
     button.lf-plan[data-state="0"]:hover { opacity: 0.7; }
     button.lf-plan[data-state="1"] {
-      color: ${cssVar('--link-color', '#936039')};
+      color: var(--lf-plan-go);
       font-weight: 700;
       opacity: 1;
     }
     button.lf-plan[data-state="2"] {
-      color: ${cssVar('--text-color', '#000')};
-      opacity: 0.55;
+      color: var(--lf-plan-skip);
+      font-weight: 700;
+      opacity: 1;
     }
-    /* Row accents — todo: warm left rail. Won't-do: fade the content. */
-    tr[data-lf-todo="1"] {
-      box-shadow: inset 4px 0 0 ${cssVar('--link-color', '#936039')};
+    /* Row accents — full-row backgrounds, matching WikiSync's completed
+       treatment. The :not(.wikisync-completed) guard lets the wiki's own
+       completion styling win when a task is both completed and planned. */
+    tr[data-lf-todo="1"]:not(.wikisync-completed) {
+      background-color: var(--lf-plan-go-bg);
     }
-    tr[data-lf-todo="2"] > td:not(.lf-plan-col) {
-      opacity: 0.5;
+    tr[data-lf-todo="1"]:not(.wikisync-completed):hover {
+      background-color: var(--lf-plan-go-bg-hover);
     }
-    tr[data-lf-todo="2"]:hover > td:not(.lf-plan-col) {
-      opacity: 0.85;
+    tr[data-lf-todo="2"]:not(.wikisync-completed) {
+      background-color: var(--lf-plan-skip-bg);
+    }
+    tr[data-lf-todo="2"]:not(.wikisync-completed):hover {
+      background-color: var(--lf-plan-skip-bg-hover);
     }
     /* Group min-widths so the row breaks nicely on narrow viewports. */
     #${FILTERS_ID} [data-lf-group="todo"] { min-width: 220px; }

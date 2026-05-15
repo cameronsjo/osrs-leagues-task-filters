@@ -2,6 +2,12 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
+## [2026-05-14.5] — colorblind-safe row tints for planned / won't-do
+
+Plan-state rows now get full-row background tints in the style of WikiSync's completed-row treatment, replacing the previous left-rail accent + content opacity dimming. Tints are derived from the Okabe-Ito palette so they're distinguishable to all forms of colorblindness — **deep teal** (`#007a5e` at ~16% alpha) for the todo state and **warm vermillion** (`#b85e1a` at ~18% alpha) for won't-do. Hover states bump alpha a few points for a sense of interaction. The glyphs in the Plan column adopt the same hues at full saturation: a teal ✓ for todo, a vermillion ✗ for won't-do.
+
+Crucially the rules carry a `:not(.wikisync-completed)` guard so the wiki's existing completion styling still wins when a task is both planned and completed — your todo tint won't fight WikiSync's green. The plan-state palette tokens (`--lf-plan-go`, `--lf-plan-skip`, plus matching `-bg` and `-bg-hover` variants) are scoped to the panel and table only, not to `:root`, so they don't pollute the page namespace.
+
 ## [2026-05-14.4] — move Plan column to the end
 
 Front-positioning the Plan column made it render wider than expected because of how the wiki sizes its first column. Appending it at the end lets natural column flow take over and the column sits flush at its declared 44px width. No behavior change — just `prepend` → `append` for the `<th>` and per-row `<td>`. Positional cell access in `parseTasks` is unaffected because the column injection runs after parsing.
