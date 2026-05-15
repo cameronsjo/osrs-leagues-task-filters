@@ -2,6 +2,18 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
+## [2026-05-14.6] — collapse to binary state, restyle Plan as a real checkbox
+
+Dropped the won't-do state. The semantics were misleading — in a time-boxed event like Leagues, "won't do" implies a commitment most players never actually make, and the second color (warm vermillion alongside the existing parchment palette) read as gold-on-gold. The model is now binary: a task is either on your todo list or it isn't.
+
+The Plan column control is no longer a cycling button with a glyph. It's a real `<input type="checkbox">` styled with `appearance:none` to look like a parchment-themed checkbox — hollow square at rest, teal-filled with a white check when ticked. Hover and focus-visible both ring it in `--lf-plan-go`. The column header reads **Todo** to match.
+
+Removed: the `Hide won't-do tasks` filter toggle, `wontDoSet`, `LS.wontDo`, `LS.hideWontDo`, `HIDE_REASONS.WONT_DO`, `matchesWontDo`, `cyclePlanState`, the `PLAN_GLYPHS` / `PLAN_LABELS` lookups, and the vermillion palette tokens. Existing `lf:<League>:wontDo` and `lf:<League>:hideWontDo` localStorage entries from prior versions are orphaned but harmless — the script no longer reads them. Counter now reads `N tasks marked`.
+
+The click handler shifted from capture-phase click delegation to capture-phase `change` delegation. The wiki's row-level click handlers `stopPropagation()` during bubble, but `change` events from form controls bubble independently of click — so capture-phase change is the cleanest route, and the native checkbox toggle happens automatically. A defensive capture-phase click `stopPropagation()` on the checkbox itself prevents the row's click handler from interpreting a checkbox click as a row click.
+
+`window.LeaguesFilters.state()` no longer exposes `wontDo` or `hideWontDo`.
+
 ## [2026-05-14.5] — colorblind-safe row tints for planned / won't-do
 
 Plan-state rows now get full-row background tints in the style of WikiSync's completed-row treatment, replacing the previous left-rail accent + content opacity dimming. Tints are derived from the Okabe-Ito palette so they're distinguishable to all forms of colorblindness — **deep teal** (`#007a5e` at ~16% alpha) for the todo state and **warm vermillion** (`#b85e1a` at ~18% alpha) for won't-do. Hover states bump alpha a few points for a sense of interaction. The glyphs in the Plan column adopt the same hues at full saturation: a teal ✓ for todo, a vermillion ✗ for won't-do.

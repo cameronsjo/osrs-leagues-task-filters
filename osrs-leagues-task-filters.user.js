@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSRS Wiki - Leagues Task Filters
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-14.5
+// @version      2026-05-14.6
 // @description  Filtering, search, and stats for Leagues task pages on the OSRS Wiki. Themed to match the wiki. Supports Demonic Pacts (VI), Raging Echoes (V), Trailblazer Reloaded (IV), and any future league with a /Tasks page. Honors the wiki's native area picker and hide-completed toggle.
 // @author       Cameron Sjo (cameronsjo). Original by https://oldschool.runescape.wiki/w/User:Loaf
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=runescape.wiki
@@ -42,8 +42,6 @@
     maxComp:  `${STORAGE_PREFIX}maxComp`,
     todo:        `${STORAGE_PREFIX}todo`,
     todoOnly:    `${STORAGE_PREFIX}todoOnly`,
-    wontDo:      `${STORAGE_PREFIX}wontDo`,
-    hideWontDo:  `${STORAGE_PREFIX}hideWontDo`,
     hideBlocked: `${STORAGE_PREFIX}hideBlocked`,
   };
 
@@ -81,13 +79,8 @@
   const FILTERED_ATTR = 'data-lf-filtered';
   const WIKI_AREA_NOTE_ID = 'lf-wiki-area-note';
 
-  // Hidden because of: f=filter, s=search, p=points, c=completion, w=wiki area mask, t=shortlist, b=blocked, x=won't do
-  const HIDE_REASONS = { FILTER: 'f', SEARCH: 's', POINTS: 'p', COMP: 'c', WIKI_AREA: 'w', SHORTLIST: 't', BLOCKED: 'b', WONT_DO: 'x' };
-
-  // Tri-state plan column. Click cycles 0 -> 1 -> 2 -> 0.
-  // 0 = untouched (no list), 1 = on todo, 2 = on won't-do.
-  const PLAN_GLYPHS = { 0: '\u2610', 1: '\u2713', 2: '\u2717' }; // ☐ ✓ ✗
-  const PLAN_LABELS = { 0: 'Untouched', 1: 'On my todo list', 2: 'Won\u2019t do' };
+  // Hidden because of: f=filter, s=search, p=points, c=completion, w=wiki area mask, t=shortlist, b=blocked
+  const HIDE_REASONS = { FILTER: 'f', SEARCH: 's', POINTS: 'p', COMP: 'c', WIKI_AREA: 'w', SHORTLIST: 't', BLOCKED: 'b' };
 
   // WikiSync injects `.qc-not-started` markers on sub-requirements (quests, skill levels,
   // item drops) the player hasn't started. A row containing one means the task cannot be
@@ -105,12 +98,8 @@
   let compMax         = 100;
   /** Task ids the user has shortlisted as a personal todo. Per-league via STORAGE_PREFIX. */
   let todoSet         = new Set();
-  /** Task ids the user has explicitly marked as "won't do". Disjoint from todoSet. */
-  let wontDoSet       = new Set();
   /** When true, only rows in todoSet are visible. */
   let todoOnly        = false;
-  /** When true, rows in wontDoSet are hidden. */
-  let hideWontDo      = false;
   /** When true, rows containing a WikiSync `.qc-not-started` marker are hidden. */
   let hideBlocked     = false;
 
@@ -157,12 +146,8 @@
     compMin       = Number(localStorage.getItem(LS.minComp)) || 0;
     compMax       = Number(localStorage.getItem(LS.maxComp)) || 100;
     todoSet       = new Set(safeJSON(localStorage.getItem(LS.todo), []));
-    wontDoSet     = new Set(safeJSON(localStorage.getItem(LS.wontDo), []));
     todoOnly      = localStorage.getItem(LS.todoOnly) === '1';
-    hideWontDo    = localStorage.getItem(LS.hideWontDo) === '1';
     hideBlocked   = localStorage.getItem(LS.hideBlocked) === '1';
-    // Defensive: if a task ever ended up in both sets (corruption), todo wins.
-    wontDoSet.forEach((id) => { if (todoSet.has(id)) wontDoSet.delete(id); });
   };
   const saveFilters  = () => localStorage.setItem(LS.filters, JSON.stringify([...activeFilters]));
   const saveSearch   = () => localStorage.setItem(LS.search, searchQuery);
@@ -175,9 +160,7 @@
     localStorage.setItem(LS.maxComp, String(compMax));
   };
   const saveTodo        = () => localStorage.setItem(LS.todo, JSON.stringify([...todoSet]));
-  const saveWontDo      = () => localStorage.setItem(LS.wontDo, JSON.stringify([...wontDoSet]));
   const saveTodoOnly    = () => localStorage.setItem(LS.todoOnly, todoOnly ? '1' : '0');
-  const saveHideWontDo  = () => localStorage.setItem(LS.hideWontDo, hideWontDo ? '1' : '0');
   const saveHideBlocked = () => localStorage.setItem(LS.hideBlocked, hideBlocked ? '1' : '0');
 
   // ============================================================
@@ -191,32 +174,13 @@
     return $table;
   };
 
-  /**
-   * Returns the plan state for a task id: 0=untouched, 1=todo, 2=won't-do.
-   * Sets are disjoint so this is unambiguous.
-   */
-  const getPlanState = (id) => (todoSet.has(id) ? 1 : wontDoSet.has(id) ? 2 : 0);
-
-  /**
-   * Cycles the plan state for a task: 0 → 1 → 2 → 0.
-   * Mutates todoSet/wontDoSet (caller persists), returns the new state.
-   */
-  const cyclePlanState = (id) => {
-    const next = (getPlanState(id) + 1) % 3;
-    todoSet.delete(id);
-    wontDoSet.delete(id);
-    if (next === 1) todoSet.add(id);
-    else if (next === 2) wontDoSet.add(id);
-    return next;
-  };
-
-  const planButtonHTML = (id) => {
-    const state = getPlanState(id);
-    return `<button type="button" class="lf-plan" data-lf-plan-id="${id}" data-state="${state}" aria-label="${PLAN_LABELS[state]}" title="Click to cycle: untouched \u2192 todo \u2192 won\u2019t do">${PLAN_GLYPHS[state]}</button>`;
+  const planCheckboxHTML = (id) => {
+    const checked = todoSet.has(id) ? ' checked' : '';
+    return `<input type="checkbox" class="lf-plan" data-lf-plan-id="${id}"${checked} aria-label="Add to my todo list"/>`;
   };
 
   /**
-   * Appends the "Plan" column as the LAST column on the table. Front-positioning
+   * Appends the "Todo" column as the LAST column on the table. Front-positioning
    * made the column render wide on the wiki because of how the wiki sizes its
    * first column. Appending lets natural column flow take over so it sits flush
    * at the end. Positional cell access in parseTasks (cells.eq(0..5)) is
@@ -225,25 +189,30 @@
   const injectPlanColumn = ($table) => {
     const $headerRow = $table.find('thead tr').first();
     if ($headerRow.length) {
-      $headerRow.append('<th class="lf-plan-col" scope="col" title="Personal plan">Plan</th>');
+      $headerRow.append('<th class="lf-plan-col" scope="col" title="Personal todo">Todo</th>');
     }
     $table.find('tbody > tr[data-taskid]').each((_, el) => {
       const $row = $(el);
       const id = $row.attr('data-taskid');
-      const state = getPlanState(id);
-      $row.append(`<td class="lf-plan-col" data-sort-value="${state}">${planButtonHTML(id)}</td>`);
-      if (state) $row.attr('data-lf-todo', String(state));
+      const onList = todoSet.has(id);
+      $row.append(`<td class="lf-plan-col" data-sort-value="${onList ? 1 : 0}">${planCheckboxHTML(id)}</td>`);
+      if (onList) $row.attr('data-lf-todo', '1');
     });
   };
 
-  const applyPlanRowAttr = (id, state) => {
+  /**
+   * Sync row-level visuals (data-lf-todo attr, sort-value, checkbox state) to
+   * the current todoSet membership for a single task. Used after programmatic
+   * mutations like Clear list; user-initiated checkbox changes already mutate
+   * the checkbox state directly, but calling this is idempotent.
+   */
+  const applyPlanRowAttr = (id, onList) => {
     const $row = $(`#${TABLE_ID} tbody > tr[data-taskid="${id}"]`);
-    if (state === 0) $row.removeAttr('data-lf-todo');
-    else $row.attr('data-lf-todo', String(state));
+    if (onList) $row.attr('data-lf-todo', '1');
+    else $row.removeAttr('data-lf-todo');
     const $cell = $row.children('td.lf-plan-col').first();
-    $cell.attr('data-sort-value', String(state));
-    const $btn = $cell.find('button.lf-plan');
-    $btn.attr('data-state', String(state)).attr('aria-label', PLAN_LABELS[state]).text(PLAN_GLYPHS[state]);
+    $cell.attr('data-sort-value', onList ? '1' : '0');
+    $cell.find('input.lf-plan').prop('checked', !!onList);
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -347,7 +316,6 @@
     return pct >= compMin && pct <= compMax;
   };
   const matchesTodo = (task) => !todoOnly || todoSet.has(task.id);
-  const matchesWontDo = (task) => !hideWontDo || !wontDoSet.has(task.id);
   /**
    * Live-queries the row each call because WikiSync injects `.qc-not-started`
    * asynchronously after the page renders; caching at parse time would go stale.
@@ -370,7 +338,6 @@
       if (!matchesPoints(task)) reasons.push(HIDE_REASONS.POINTS);
       if (!matchesComp(task))   reasons.push(HIDE_REASONS.COMP);
       if (!matchesTodo(task))    reasons.push(HIDE_REASONS.SHORTLIST);
-      if (!matchesWontDo(task))  reasons.push(HIDE_REASONS.WONT_DO);
       if (!matchesBlocked(task)) reasons.push(HIDE_REASONS.BLOCKED);
       if (reasons.length === 0) {
         $row.removeAttr(FILTERED_ATTR).css('display', '');
@@ -395,16 +362,12 @@
     /* Panel scoping + design tokens. Tokens are scoped to the panel so they
        never leak into the wiki's stylesheet. */
     #${FILTERS_ID}, #${TABLE_ID} {
-      /* Plan-state palette — Okabe-Ito-derived, colorblind-safe.
-         Distinct in hue AND lightness so the pair holds up under any form of
+      /* Single Todo accent — Okabe-Ito teal, distinguishable to all forms of
          color vision deficiency. Defined on both the panel and the table so
-         the row tints below can reference them. */
+         the row tint and checkbox both reference it. */
       --lf-plan-go: #007a5e;
-      --lf-plan-skip: #b85e1a;
-      --lf-plan-go-bg: rgba(0, 122, 94, 0.16);
-      --lf-plan-go-bg-hover: rgba(0, 122, 94, 0.24);
-      --lf-plan-skip-bg: rgba(184, 94, 26, 0.18);
-      --lf-plan-skip-bg-hover: rgba(184, 94, 26, 0.28);
+      --lf-plan-go-bg: rgba(0, 122, 94, 0.14);
+      --lf-plan-go-bg-hover: rgba(0, 122, 94, 0.22);
     }
     #${FILTERS_ID} {
       --lf-border: ${cssVar('--wikitable-border', '#94866d')};
@@ -630,57 +593,54 @@
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
-    button.lf-plan {
-      display: inline-flex;
+    /* Plan column checkbox — a real <input type="checkbox"> styled to read as
+       a parchment-themed checkbox. appearance:none lets us paint the box and
+       the check ourselves so it looks consistent across browsers. */
+    input.lf-plan {
+      appearance: none;
+      -webkit-appearance: none;
+      margin: 0;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
+      background: ${cssVar('--body-light', '#d8ccb4')};
+      display: inline-block;
+      vertical-align: middle;
+      position: relative;
+      cursor: pointer;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+      transition: background var(--lf-transition, 120ms ease), border-color var(--lf-transition, 120ms ease);
+    }
+    input.lf-plan:hover { border-color: var(--lf-plan-go); }
+    input.lf-plan:focus-visible {
+      outline: 2px solid var(--lf-plan-go);
+      outline-offset: 2px;
+    }
+    input.lf-plan:checked {
+      background: var(--lf-plan-go);
+      border-color: var(--lf-plan-go);
+    }
+    input.lf-plan:checked::after {
+      content: '\u2713';
+      position: absolute;
+      inset: 0;
+      display: flex;
       align-items: center;
       justify-content: center;
-      width: 24px;
-      height: 24px;
-      padding: 0;
-      font-family: inherit;
-      font-size: 16px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
       line-height: 1;
-      background: transparent;
-      border: 1px solid transparent;
-      color: var(--lf-text, ${cssVar('--text-color', '#000')});
-      cursor: pointer;
-      transition: background var(--lf-transition, 120ms ease), border-color var(--lf-transition, 120ms ease), color var(--lf-transition, 120ms ease), transform var(--lf-transition, 120ms ease);
     }
-    button.lf-plan:hover {
-      background: ${cssVar('--body-light', '#d8ccb4')};
-      border-color: ${cssVar('--wikitable-border', '#94866d')};
-    }
-    button.lf-plan:active { transform: scale(0.92); }
-    button.lf-plan:focus-visible {
-      outline: 2px solid ${cssVar('--link-color', '#936039')};
-      outline-offset: 1px;
-    }
-    button.lf-plan[data-state="0"] { opacity: 0.35; }
-    button.lf-plan[data-state="0"]:hover { opacity: 0.7; }
-    button.lf-plan[data-state="1"] {
-      color: var(--lf-plan-go);
-      font-weight: 700;
-      opacity: 1;
-    }
-    button.lf-plan[data-state="2"] {
-      color: var(--lf-plan-skip);
-      font-weight: 700;
-      opacity: 1;
-    }
-    /* Row accents — full-row backgrounds, matching WikiSync's completed
-       treatment. The :not(.wikisync-completed) guard lets the wiki's own
-       completion styling win when a task is both completed and planned. */
+    /* Row tint for marked rows — matches WikiSync's completed treatment.
+       The :not(.wikisync-completed) guard lets the wiki's own completion
+       styling win when a task is both completed and marked. */
     tr[data-lf-todo="1"]:not(.wikisync-completed) {
       background-color: var(--lf-plan-go-bg);
     }
     tr[data-lf-todo="1"]:not(.wikisync-completed):hover {
       background-color: var(--lf-plan-go-bg-hover);
-    }
-    tr[data-lf-todo="2"]:not(.wikisync-completed) {
-      background-color: var(--lf-plan-skip-bg);
-    }
-    tr[data-lf-todo="2"]:not(.wikisync-completed):hover {
-      background-color: var(--lf-plan-skip-bg-hover);
     }
     /* Group min-widths so the row breaks nicely on narrow viewports. */
     #${FILTERS_ID} [data-lf-group="todo"] { min-width: 220px; }
@@ -777,10 +737,9 @@
             ${groupOptions('Skill',        dims.skills,       'skill')}
             ${groupOptions('Status',       new Set(miscOpts), 'misc', (m) => ({ complete: 'Completed', incomplete: 'Incomplete' }[m] || m))}
             <div class="lf-group" data-lf-group="todo">
-              <h4>Todo list <span class="lf-group-actions"><button type="button" data-lf-export-md title="Copy your todo list as markdown">Export</button><button type="button" data-lf-clear-todo title="Clear todo and won\u2019t-do lists">Clear</button></span></h4>
+              <h4>Todo list <span class="lf-group-actions"><button type="button" data-lf-export-md title="Copy your todo list as markdown">Export</button><button type="button" data-lf-clear-todo title="Empty your todo list">Clear</button></span></h4>
               <div class="lf-options">
                 <label for="lf-todo-only"><input type="checkbox" id="lf-todo-only" ${todoOnly ? 'checked' : ''}/> Show only my todo list</label>
-                <label for="lf-hide-wontdo"><input type="checkbox" id="lf-hide-wontdo" ${hideWontDo ? 'checked' : ''}/> Hide won\u2019t-do tasks</label>
                 <div id="lf-todo-count"></div>
                 <div id="lf-export-toast" class="lf-toast" aria-live="polite"></div>
               </div>
@@ -891,13 +850,8 @@
   const updateTodoCount = () => {
     const $el = $('#lf-todo-count');
     if (!$el.length) return;
-    const todo = todoSet.size;
-    const wont = wontDoSet.size;
-    if (todo === 0 && wont === 0) {
-      $el.text('nothing on your plan yet');
-    } else {
-      $el.text(`${todo} todo \u00b7 ${wont} won\u2019t-do`);
-    }
+    const n = todoSet.size;
+    $el.text(n === 0 ? 'nothing marked' : `${n} task${n === 1 ? '' : 's'} marked`);
   };
 
   const updateBlockedCount = (count) => {
@@ -984,54 +938,50 @@
       searchQuery = '';
       pointsMin = 0; pointsMax = Infinity;
       compMin = 0; compMax = 100;
-      // Intentionally do NOT clear todoSet/wontDoSet — those are curated work, not
-      // transient filter state. We only turn off the visibility toggles.
+      // Intentionally do NOT clear todoSet — the shortlist is curated work,
+      // not transient filter state. We only turn off the visibility toggles.
       todoOnly = false;
-      hideWontDo = false;
       hideBlocked = false;
       saveFilters(); saveSearch(); savePoints(); saveComp();
-      saveTodoOnly(); saveHideWontDo(); saveHideBlocked();
+      saveTodoOnly(); saveHideBlocked();
       $(`#${FILTERS_ID} input[data-lf-kind]`).prop('checked', false);
       $(`#${SEARCH_ID}`).val('');
       $('#lf-pts-min').val(0); $('#lf-pts-max').val(dims.pointsObserved.max);
       $('#lf-comp-min').val(0); $('#lf-comp-max').val(100);
       $('#lf-todo-only').prop('checked', false);
-      $('#lf-hide-wontdo').prop('checked', false);
       $('#lf-hide-blocked').prop('checked', false);
       applyFilters();
     });
 
-    // Per-row plan cycle button. The wiki binds direct click handlers on each
-    // <tr> (WikiSync's row-toggle feature) that call event.stopPropagation()
-    // during bubble — so a jQuery-delegated handler on the table never sees
-    // the event. We attach in CAPTURE phase at the table level so we fire
-    // BEFORE the bubble path reaches the TR's interception. stopPropagation()
-    // here also keeps the click from accidentally triggering the row toggle.
+    // Per-row Todo checkbox. The wiki binds direct click handlers on each <tr>
+    // (WikiSync's row-toggle feature) that call event.stopPropagation() during
+    // bubble — so a delegated handler on the table never sees a click. We
+    // listen for `change` in capture phase, which is independent of the row's
+    // click stopPropagation, and lets the native checkbox toggle happen first.
     const tableEl = document.getElementById(TABLE_ID);
     if (tableEl) {
-      tableEl.addEventListener('click', (e) => {
-        const btn = e.target && e.target.closest && e.target.closest('button.lf-plan');
-        if (!btn) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const id = btn.getAttribute('data-lf-plan-id');
-        const next = cyclePlanState(id);
+      tableEl.addEventListener('change', (e) => {
+        const cb = e.target;
+        if (!cb || !cb.matches || !cb.matches('input.lf-plan')) return;
+        const id = cb.getAttribute('data-lf-plan-id');
+        if (cb.checked) todoSet.add(id);
+        else todoSet.delete(id);
         saveTodo();
-        saveWontDo();
-        applyPlanRowAttr(id, next);
+        applyPlanRowAttr(id, cb.checked);
         applyFilters();
+      }, true);
+      // Belt-and-suspenders: stop click bubbling on the plan cell so the
+      // wiki's row handlers (if any) don't react to a checkbox click.
+      tableEl.addEventListener('click', (e) => {
+        if (e.target && e.target.matches && e.target.matches('input.lf-plan')) {
+          e.stopPropagation();
+        }
       }, true);
     }
 
     $('#lf-todo-only').on('change', function () {
       todoOnly = this.checked;
       saveTodoOnly();
-      applyFilters();
-    });
-
-    $('#lf-hide-wontdo').on('change', function () {
-      hideWontDo = this.checked;
-      saveHideWontDo();
       applyFilters();
     });
 
@@ -1042,16 +992,14 @@
     });
 
     $(`#${FILTERS_ID}`).on('click', '[data-lf-clear-todo]', () => {
-      const total = todoSet.size + wontDoSet.size;
-      if (total === 0) return;
-      if (!window.confirm(`Clear all personal markers (${todoSet.size} todo + ${wontDoSet.size} won\u2019t-do)?`)) return;
+      const n = todoSet.size;
+      if (n === 0) return;
+      if (!window.confirm(`Empty your todo list (${n} task${n === 1 ? '' : 's'})?`)) return;
       todoSet.clear();
-      wontDoSet.clear();
       saveTodo();
-      saveWontDo();
       $(`#${TABLE_ID} tr[data-lf-todo]`).each(function () {
         const id = $(this).attr('data-taskid');
-        applyPlanRowAttr(id, 0);
+        applyPlanRowAttr(id, false);
       });
       applyFilters();
     });
@@ -1213,9 +1161,7 @@
       wikiHiddenAreas: [...wikiHiddenAreas],
       activeFilters: [...activeFilters],
       todo: todoSet.size,
-      wontDo: wontDoSet.size,
       todoOnly,
-      hideWontDo,
       hideBlocked,
       panelInDom: !!document.getElementById(FILTERS_ID),
     }),
