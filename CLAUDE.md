@@ -79,9 +79,17 @@ The script logs `[Leagues Filters] script loaded` → `boot — url: ...` → `f
 2. Bump `@version`, update CHANGELOG, regenerate min.
 3. The script auto-detects the league from the URL pathname, so no other code changes — assuming the new league reuses the standard `[data-taskid]` table structure (check by visiting the page and confirming rows have `data-taskid`).
 
+## Plans
+
+Written-but-unshipped implementation plans live in `docs/plans/YYYY-MM-DD-<slug>.md`. Check these before starting work that overlaps — there may already be an approved design ready to execute against:
+
+- `2026-05-16-plan-skip-two-axis-curation.md` — adds a Skip checkbox column alongside Plan, three filter toggles, and three planning-math stat pills (Plan / Pool / Excluded). Approved but not yet implemented.
+
 ## Field reports
 
 Longer narrative writeups of past sessions live in `docs/field-reports/`. Check these first if your work overlaps:
 
 - `capture-phase-vs-row-stoppropagation.md` — why event handlers on rows silently disappear, and the capture-phase fix.
 - `tri-state-to-binary-collapse.md` — design conversation about why the Plan column went from tri-state (todo/won't-do/untouched) to binary (todo/untouched). Useful before adding curation states.
+- `lane-reframe-design-pivot.md` — full narrative of the View/Filter/Plan/Exclude lane reframe that retroactively explained earlier design failures. Read before any curation-UX iteration.
+- `binary-axes-vs-state-cycles.md` — extractable design pattern: N independent binary axes = 2ⁿ states for free. Apply when modeling orthogonal user concerns on list items.

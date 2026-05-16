@@ -20,3 +20,4 @@ yarn.lock
 
 # Playwright MCP server local artifacts (snapshots, console logs)
 .playwright-mcp/
+.claude/intros/
