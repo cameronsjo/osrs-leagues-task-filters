@@ -2,6 +2,31 @@
 
 All notable changes to this script. Versions follow `YYYY-MM-DD.N` where `N` increments for multiple releases on the same day.
 
+## [2026-05-16.1] — two-axis curation (Plan + Skip) with planning math
+
+Reframed the per-row curation as **two orthogonal binary axes** instead of a single Todo column. Two checkbox columns now sit at the end of the table — **Plan** (teal ✓) and **Skip** (parchment-brown ✗) — and the four combinations of their states each carry distinct meaning:
+
+| Plan | Skip | Meaning | Visual |
+|---|---|---|---|
+| ☐ | ☐ | Default | no tint |
+| ✓ | ☐ | Plan-strict (active focus) | solid teal tint |
+| ☐ | ✗ | Excluded (off the table) | faded cells when peeked |
+| ✓ | ✗ | Later (deferred but kept in mind) | diagonal teal stripes |
+
+This unlocks the planning workflow Cameron actually uses: pick tasks toward point thresholds for Relics, Areas, and Pact unlocks, exclude tasks you won't do (raids, etc.) so they leave the available pool, and defer tasks for "later" without losing them. Four states fall out of two checkboxes for free.
+
+The **Plan** filter group (renamed from "Todo list") gains two new toggles alongside `Show only my plan`: `Show "later" tasks` and `Show excluded tasks`. The status bar gets three new stat pills after Total/Completed: **Plan**, **Pool**, and **Excluded**. `Pool = Total − Excluded`; Later tasks remain in the pool as available consideration.
+
+Internally: `matchesTodo` is replaced by a single `matchesPlanState` that owns all visibility decisions across the three toggles, sourced from a new four-state derivation helper `getPlanState(id)`. `applyPlanRowAttr` is replaced by `applyRowState(id)`, which sets both `data-lf-plan` and `data-lf-skip` from the two sets — the row attributes are the single source of truth for the CSS selectors. New `HIDE_REASONS.LATER` (`L`) and `HIDE_REASONS.EXCLUDED` (`x`) join the existing reason codes; `HIDE_REASONS.SHORTLIST` (`t`) sharpens from "not in todo" to "non-strict-plan when todoOnly is on."
+
+The Skip checkbox uses the same capture-phase `addEventListener('change', handler, true)` pattern as Plan to slip past WikiSync's row-level `stopPropagation`. A defensive capture-phase click `stopPropagation` is added for the Skip cell, mirroring Plan.
+
+Storage adds `LS.excluded`, `LS.showLater`, `LS.showExcluded`. The `Clear` button now confirms with both counts and wipes both sets. The `Clear all filters` button continues to preserve both `todoSet` and `excludedSet`, and also resets `showLater` and `showExcluded`.
+
+The markdown export now copies only your **strict plan** (Plan ✓ + Skip ☐) — Later tasks are private deferrals, not part of the share. The title changes from `— Todo` to `— Plan`.
+
+`window.LeaguesFilters.state()` drops the single `todo` count in favor of `plan` / `later` / `excluded` breakdown, plus `showLater` and `showExcluded` toggle flags.
+
 ## [2026-05-14.6] — collapse to binary state, restyle Plan as a real checkbox
 
 Dropped the won't-do state. The semantics were misleading — in a time-boxed event like Leagues, "won't do" implies a commitment most players never actually make, and the second color (warm vermillion alongside the existing parchment palette) read as gold-on-gold. The model is now binary: a task is either on your todo list or it isn't.

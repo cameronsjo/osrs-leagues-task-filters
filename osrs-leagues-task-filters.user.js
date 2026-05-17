@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         OSRS Wiki - Leagues Task Filters
 // @namespace    http://tampermonkey.net/
-// @version      2026-05-14.6
+// @version      2026-05-16.1
 // @description  Filtering, search, and stats for Leagues task pages on the OSRS Wiki. Themed to match the wiki. Supports Demonic Pacts (VI), Raging Echoes (V), Trailblazer Reloaded (IV), and any future league with a /Tasks page. Honors the wiki's native area picker and hide-completed toggle.
 // @author       Cameron Sjo (cameronsjo). Original by https://oldschool.runescape.wiki/w/User:Loaf
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=runescape.wiki
@@ -40,9 +40,12 @@
     maxPts:   `${STORAGE_PREFIX}maxPts`,
     minComp:  `${STORAGE_PREFIX}minComp`,
     maxComp:  `${STORAGE_PREFIX}maxComp`,
-    todo:        `${STORAGE_PREFIX}todo`,
-    todoOnly:    `${STORAGE_PREFIX}todoOnly`,
-    hideBlocked: `${STORAGE_PREFIX}hideBlocked`,
+    todo:         `${STORAGE_PREFIX}todo`,
+    todoOnly:     `${STORAGE_PREFIX}todoOnly`,
+    excluded:     `${STORAGE_PREFIX}excluded`,
+    showLater:    `${STORAGE_PREFIX}showLater`,
+    showExcluded: `${STORAGE_PREFIX}showExcluded`,
+    hideBlocked:  `${STORAGE_PREFIX}hideBlocked`,
   };
 
   // Difficulty images use either the DPL "pact tasks" set OR the legacy
@@ -79,8 +82,15 @@
   const FILTERED_ATTR = 'data-lf-filtered';
   const WIKI_AREA_NOTE_ID = 'lf-wiki-area-note';
 
-  // Hidden because of: f=filter, s=search, p=points, c=completion, w=wiki area mask, t=shortlist, b=blocked
-  const HIDE_REASONS = { FILTER: 'f', SEARCH: 's', POINTS: 'p', COMP: 'c', WIKI_AREA: 'w', SHORTLIST: 't', BLOCKED: 'b' };
+  // Hidden because of: f=filter, s=search, p=points, c=completion, w=wiki area mask, t=shortlist (Plan-only mode),
+  //                    L=later (showLater off), x=excluded (showExcluded off), b=blocked.
+  const HIDE_REASONS = { FILTER: 'f', SEARCH: 's', POINTS: 'p', COMP: 'c', WIKI_AREA: 'w', SHORTLIST: 't', LATER: 'L', EXCLUDED: 'x', BLOCKED: 'b' };
+
+  // Four-state derivation buckets for the per-row Plan + Skip pair.
+  const STATE_DEFAULT = 0;
+  const STATE_PLAN = 1;
+  const STATE_EXCLUDED = 2;
+  const STATE_LATER = 3;
 
   // WikiSync injects `.qc-not-started` markers on sub-requirements (quests, skill levels,
   // item drops) the player hasn't started. A row containing one means the task cannot be
@@ -96,10 +106,16 @@
   let pointsMax       = Infinity;
   let compMin         = 0;
   let compMax         = 100;
-  /** Task ids the user has shortlisted as a personal todo. Per-league via STORAGE_PREFIX. */
+  /** Task ids on the user's active plan. Per-league via STORAGE_PREFIX. */
   let todoSet         = new Set();
-  /** When true, only rows in todoSet are visible. */
+  /** Task ids the user has excluded (won't do / off the table). Per-league. */
+  let excludedSet     = new Set();
+  /** When true, only Plan-strict (and Later when showLater is on) rows are visible. */
   let todoOnly        = false;
+  /** When true, rows in the Later combo state (Plan ✓ + Skip ✗) are visible. */
+  let showLater       = false;
+  /** When true, strict-excluded rows (Plan ☐ + Skip ✗) are visible, rendered faded. */
+  let showExcluded    = false;
   /** When true, rows containing a WikiSync `.qc-not-started` marker are hidden. */
   let hideBlocked     = false;
 
@@ -146,7 +162,10 @@
     compMin       = Number(localStorage.getItem(LS.minComp)) || 0;
     compMax       = Number(localStorage.getItem(LS.maxComp)) || 100;
     todoSet       = new Set(safeJSON(localStorage.getItem(LS.todo), []));
+    excludedSet   = new Set(safeJSON(localStorage.getItem(LS.excluded), []));
     todoOnly      = localStorage.getItem(LS.todoOnly) === '1';
+    showLater     = localStorage.getItem(LS.showLater) === '1';
+    showExcluded  = localStorage.getItem(LS.showExcluded) === '1';
     hideBlocked   = localStorage.getItem(LS.hideBlocked) === '1';
   };
   const saveFilters  = () => localStorage.setItem(LS.filters, JSON.stringify([...activeFilters]));
@@ -159,9 +178,12 @@
     localStorage.setItem(LS.minComp, String(compMin));
     localStorage.setItem(LS.maxComp, String(compMax));
   };
-  const saveTodo        = () => localStorage.setItem(LS.todo, JSON.stringify([...todoSet]));
-  const saveTodoOnly    = () => localStorage.setItem(LS.todoOnly, todoOnly ? '1' : '0');
-  const saveHideBlocked = () => localStorage.setItem(LS.hideBlocked, hideBlocked ? '1' : '0');
+  const saveTodo         = () => localStorage.setItem(LS.todo, JSON.stringify([...todoSet]));
+  const saveExcluded     = () => localStorage.setItem(LS.excluded, JSON.stringify([...excludedSet]));
+  const saveTodoOnly     = () => localStorage.setItem(LS.todoOnly, todoOnly ? '1' : '0');
+  const saveShowLater    = () => localStorage.setItem(LS.showLater, showLater ? '1' : '0');
+  const saveShowExcluded = () => localStorage.setItem(LS.showExcluded, showExcluded ? '1' : '0');
+  const saveHideBlocked  = () => localStorage.setItem(LS.hideBlocked, hideBlocked ? '1' : '0');
 
   // ============================================================
   // TABLE PARSING
@@ -174,45 +196,73 @@
     return $table;
   };
 
+  /**
+   * Four-state bucket for a row, derived from the two independent axes.
+   * Plan ✓ + Skip ✗ = Later (deferred but kept in mind).
+   */
+  const getPlanState = (id) => {
+    const p = todoSet.has(id);
+    const s = excludedSet.has(id);
+    if (p && s) return STATE_LATER;
+    if (p)      return STATE_PLAN;
+    if (s)      return STATE_EXCLUDED;
+    return STATE_DEFAULT;
+  };
+
   const planCheckboxHTML = (id) => {
     const checked = todoSet.has(id) ? ' checked' : '';
-    return `<input type="checkbox" class="lf-plan" data-lf-plan-id="${id}"${checked} aria-label="Add to my todo list"/>`;
+    return `<input type="checkbox" class="lf-plan" data-lf-plan-id="${id}"${checked} aria-label="Plan this task"/>`;
+  };
+  const skipCheckboxHTML = (id) => {
+    const checked = excludedSet.has(id) ? ' checked' : '';
+    return `<input type="checkbox" class="lf-skip" data-lf-skip-id="${id}"${checked} aria-label="Skip this task"/>`;
   };
 
   /**
-   * Appends the "Todo" column as the LAST column on the table. Front-positioning
-   * made the column render wide on the wiki because of how the wiki sizes its
-   * first column. Appending lets natural column flow take over so it sits flush
-   * at the end. Positional cell access in parseTasks (cells.eq(0..5)) is
-   * unaffected either way because injectPlanColumn runs after parseTasks.
+   * Appends the "Plan" and "Skip" columns as the LAST two columns on the
+   * table. Front-positioning made columns render wide on the wiki because
+   * of how the wiki sizes its first column. Positional cell access in
+   * parseTasks (cells.eq(0..5)) is unaffected because injectPlanColumn
+   * runs after parseTasks.
    */
   const injectPlanColumn = ($table) => {
     const $headerRow = $table.find('thead tr').first();
     if ($headerRow.length) {
-      $headerRow.append('<th class="lf-plan-col" scope="col" title="Personal todo">Todo</th>');
+      $headerRow.append('<th class="lf-plan-col" scope="col" title="Plan this task">Plan</th>');
+      $headerRow.append('<th class="lf-skip-col" scope="col" title="Skip this task">Skip</th>');
     }
     $table.find('tbody > tr[data-taskid]').each((_, el) => {
       const $row = $(el);
       const id = $row.attr('data-taskid');
-      const onList = todoSet.has(id);
-      $row.append(`<td class="lf-plan-col" data-sort-value="${onList ? 1 : 0}">${planCheckboxHTML(id)}</td>`);
-      if (onList) $row.attr('data-lf-todo', '1');
+      const plan = todoSet.has(id);
+      const skip = excludedSet.has(id);
+      $row.append(`<td class="lf-plan-col" data-sort-value="${plan ? 1 : 0}">${planCheckboxHTML(id)}</td>`);
+      $row.append(`<td class="lf-skip-col" data-sort-value="${skip ? 1 : 0}">${skipCheckboxHTML(id)}</td>`);
+      $row.attr('data-lf-plan', plan ? '1' : '0');
+      $row.attr('data-lf-skip', skip ? '1' : '0');
     });
   };
 
   /**
-   * Sync row-level visuals (data-lf-todo attr, sort-value, checkbox state) to
-   * the current todoSet membership for a single task. Used after programmatic
-   * mutations like Clear list; user-initiated checkbox changes already mutate
-   * the checkbox state directly, but calling this is idempotent.
+   * Sync row-level visuals (data-lf-plan, data-lf-skip, sort values, both
+   * checkbox states) to the current set membership for a single task. Used
+   * after programmatic mutations like Clear list and after individual
+   * checkbox changes to keep the row attributes the single source of truth
+   * for the CSS selectors.
    */
-  const applyPlanRowAttr = (id, onList) => {
+  const applyRowState = (id) => {
     const $row = $(`#${TABLE_ID} tbody > tr[data-taskid="${id}"]`);
-    if (onList) $row.attr('data-lf-todo', '1');
-    else $row.removeAttr('data-lf-todo');
-    const $cell = $row.children('td.lf-plan-col').first();
-    $cell.attr('data-sort-value', onList ? '1' : '0');
-    $cell.find('input.lf-plan').prop('checked', !!onList);
+    if (!$row.length) return;
+    const plan = todoSet.has(id);
+    const skip = excludedSet.has(id);
+    $row.attr('data-lf-plan', plan ? '1' : '0');
+    $row.attr('data-lf-skip', skip ? '1' : '0');
+    const $planCell = $row.children('td.lf-plan-col').first();
+    $planCell.attr('data-sort-value', plan ? '1' : '0');
+    $planCell.find('input.lf-plan').prop('checked', plan);
+    const $skipCell = $row.children('td.lf-skip-col').first();
+    $skipCell.attr('data-sort-value', skip ? '1' : '0');
+    $skipCell.find('input.lf-skip').prop('checked', skip);
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -315,7 +365,22 @@
     const pct = Math.min(task.completionPct, 100);
     return pct >= compMin && pct <= compMax;
   };
-  const matchesTodo = (task) => !todoOnly || todoSet.has(task.id);
+  /**
+   * Single matcher for the four-state Plan + Skip axes. Owns all visibility
+   * decisions driven by the three filter toggles (todoOnly, showLater,
+   * showExcluded). Default-state rows always show unless todoOnly is on.
+   */
+  const matchesPlanState = (task) => {
+    const st = getPlanState(task.id);
+    if (todoOnly) {
+      if (st === STATE_PLAN)  return true;
+      if (st === STATE_LATER) return showLater;
+      return false;
+    }
+    if (st === STATE_LATER)    return showLater;
+    if (st === STATE_EXCLUDED) return showExcluded;
+    return true;
+  };
   /**
    * Live-queries the row each call because WikiSync injects `.qc-not-started`
    * asynchronously after the page renders; caching at parse time would go stale.
@@ -325,8 +390,12 @@
   const applyFilters = () => {
     refreshWikiHiddenAreas();
     let visible = 0, visiblePts = 0, totalPts = 0, completedPts = 0, blockedCount = 0;
+    let planPts = 0, excludedPts = 0;
     tasks.forEach((task) => {
       totalPts += task.points;
+      const st = getPlanState(task.id);
+      if (st === STATE_PLAN)     planPts     += task.points;
+      if (st === STATE_EXCLUDED) excludedPts += task.points;
       const $row = $(task.row);
       const isCompleted = $row.hasClass('wikisync-completed') || $row.find('.wikisync-completed').length > 0;
       if (isCompleted) completedPts += task.points;
@@ -337,7 +406,13 @@
       if (!matchesSearch(task)) reasons.push(HIDE_REASONS.SEARCH);
       if (!matchesPoints(task)) reasons.push(HIDE_REASONS.POINTS);
       if (!matchesComp(task))   reasons.push(HIDE_REASONS.COMP);
-      if (!matchesTodo(task))    reasons.push(HIDE_REASONS.SHORTLIST);
+      if (!matchesPlanState(task)) {
+        reasons.push(
+          st === STATE_LATER    ? HIDE_REASONS.LATER    :
+          st === STATE_EXCLUDED ? HIDE_REASONS.EXCLUDED :
+                                  HIDE_REASONS.SHORTLIST
+        );
+      }
       if (!matchesBlocked(task)) reasons.push(HIDE_REASONS.BLOCKED);
       if (reasons.length === 0) {
         $row.removeAttr(FILTERED_ATTR).css('display', '');
@@ -347,7 +422,9 @@
         $row.attr(FILTERED_ATTR, reasons.join(',')).css('display', 'none');
       }
     });
-    updateStatus(visible, visiblePts, totalPts, completedPts);
+    // Pool counts Later as available consideration; only strict-excluded leaves the pool.
+    const poolPts = totalPts - excludedPts;
+    updateStatus(visible, visiblePts, totalPts, completedPts, planPts, poolPts, excludedPts);
     updateWikiAreaNote();
     updateTodoCount();
     updateBlockedCount(blockedCount);
@@ -362,12 +439,16 @@
     /* Panel scoping + design tokens. Tokens are scoped to the panel so they
        never leak into the wiki's stylesheet. */
     #${FILTERS_ID}, #${TABLE_ID} {
-      /* Single Todo accent — Okabe-Ito teal, distinguishable to all forms of
-         color vision deficiency. Defined on both the panel and the table so
-         the row tint and checkbox both reference it. */
+      /* Plan accent — Okabe-Ito teal, distinguishable to all forms of color
+         vision deficiency. Defined on both the panel and the table so the
+         row tint and checkbox both reference it. */
       --lf-plan-go: #007a5e;
       --lf-plan-go-bg: rgba(0, 122, 94, 0.14);
       --lf-plan-go-bg-hover: rgba(0, 122, 94, 0.22);
+      /* Skip accent — parchment-brown, neutral and palette-native so the
+         "won't do" mark feels like a removal rather than a competing color. */
+      --lf-plan-skip: ${cssVar('--wikitable-border', '#94866d')};
+      --lf-plan-skip-bg: rgba(148, 134, 109, 0.18);
     }
     #${FILTERS_ID} {
       --lf-border: ${cssVar('--wikitable-border', '#94866d')};
@@ -579,15 +660,18 @@
       background: var(--lf-body-light);
       border: 1px solid var(--lf-border);
     }
-    /* ─── Plan column on the leagues table ─────────────────────────── */
+    /* ─── Plan + Skip columns on the leagues table ─────────────────── */
     #${TABLE_ID} th.lf-plan-col,
-    #${TABLE_ID} td.lf-plan-col {
+    #${TABLE_ID} td.lf-plan-col,
+    #${TABLE_ID} th.lf-skip-col,
+    #${TABLE_ID} td.lf-skip-col {
       width: 44px;
       min-width: 44px;
       text-align: center;
       padding: 4px 2px;
     }
-    #${TABLE_ID} th.lf-plan-col {
+    #${TABLE_ID} th.lf-plan-col,
+    #${TABLE_ID} th.lf-skip-col {
       font-size: 0.75em;
       font-weight: 700;
       letter-spacing: 0.08em;
@@ -633,14 +717,67 @@
       font-weight: 700;
       line-height: 1;
     }
-    /* Row tint for marked rows — matches WikiSync's completed treatment.
-       The :not(.wikisync-completed) guard lets the wiki's own completion
-       styling win when a task is both completed and marked. */
-    tr[data-lf-todo="1"]:not(.wikisync-completed) {
+    /* Skip column checkbox — same shape as Plan, parchment-brown fill, ✗ glyph
+       so the two states stay unambiguous side-by-side without relying on color. */
+    input.lf-skip {
+      appearance: none;
+      -webkit-appearance: none;
+      margin: 0;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: 1px solid ${cssVar('--wikitable-border', '#94866d')};
+      background: ${cssVar('--body-light', '#d8ccb4')};
+      display: inline-block;
+      vertical-align: middle;
+      position: relative;
+      cursor: pointer;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+      transition: background var(--lf-transition, 120ms ease), border-color var(--lf-transition, 120ms ease);
+    }
+    input.lf-skip:hover { border-color: var(--lf-plan-skip); }
+    input.lf-skip:focus-visible {
+      outline: 2px solid var(--lf-plan-skip);
+      outline-offset: 2px;
+    }
+    input.lf-skip:checked {
+      background: var(--lf-plan-skip);
+      border-color: var(--lf-plan-skip);
+    }
+    input.lf-skip:checked::after {
+      content: '✗';
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    /* Row tints for the four-state Plan + Skip pair. The :not(.wikisync-completed)
+       guard lets the wiki's own completion styling win when both apply.
+       - Plan-strict (Plan checked, Skip unchecked) -> solid teal tint
+       - Later       (Plan checked, Skip checked)   -> diagonal teal stripes — "marked but parked"
+       - Excluded    (Plan unchecked, Skip checked) -> fade non-control cells so the row reads as crossed off */
+    tr[data-lf-plan="1"]:not([data-lf-skip="1"]):not(.wikisync-completed) {
       background-color: var(--lf-plan-go-bg);
     }
-    tr[data-lf-todo="1"]:not(.wikisync-completed):hover {
+    tr[data-lf-plan="1"]:not([data-lf-skip="1"]):not(.wikisync-completed):hover {
       background-color: var(--lf-plan-go-bg-hover);
+    }
+    tr[data-lf-plan="1"][data-lf-skip="1"]:not(.wikisync-completed) {
+      background-image: repeating-linear-gradient(
+        45deg,
+        rgba(0, 122, 94, 0.13),
+        rgba(0, 122, 94, 0.13) 6px,
+        transparent 6px,
+        transparent 12px
+      );
+    }
+    tr[data-lf-skip="1"]:not([data-lf-plan="1"]):not(.wikisync-completed) > td:not(.lf-plan-col):not(.lf-skip-col) {
+      opacity: 0.45;
     }
     /* Group min-widths so the row breaks nicely on narrow viewports. */
     #${FILTERS_ID} [data-lf-group="todo"] { min-width: 220px; }
@@ -737,9 +874,11 @@
             ${groupOptions('Skill',        dims.skills,       'skill')}
             ${groupOptions('Status',       new Set(miscOpts), 'misc', (m) => ({ complete: 'Completed', incomplete: 'Incomplete' }[m] || m))}
             <div class="lf-group" data-lf-group="todo">
-              <h4>Todo list <span class="lf-group-actions"><button type="button" data-lf-export-md title="Copy your todo list as markdown">Export</button><button type="button" data-lf-clear-todo title="Empty your todo list">Clear</button></span></h4>
+              <h4>Plan <span class="lf-group-actions"><button type="button" data-lf-export-md title="Copy your plan as markdown">Export</button><button type="button" data-lf-clear-todo title="Clear plan and excluded lists">Clear</button></span></h4>
               <div class="lf-options">
-                <label for="lf-todo-only"><input type="checkbox" id="lf-todo-only" ${todoOnly ? 'checked' : ''}/> Show only my todo list</label>
+                <label for="lf-todo-only"><input type="checkbox" id="lf-todo-only" ${todoOnly ? 'checked' : ''}/> Show only my plan</label>
+                <label for="lf-show-later"><input type="checkbox" id="lf-show-later" ${showLater ? 'checked' : ''}/> Show &ldquo;later&rdquo; tasks</label>
+                <label for="lf-show-excluded"><input type="checkbox" id="lf-show-excluded" ${showExcluded ? 'checked' : ''}/> Show excluded tasks</label>
                 <div id="lf-todo-count"></div>
                 <div id="lf-export-toast" class="lf-toast" aria-live="polite"></div>
               </div>
@@ -778,15 +917,18 @@
   };
 
   /**
-   * Builds a markdown checklist of the user's todo list, grouped by area, sorted
-   * by difficulty within each area. Returns "" when the list is empty.
+   * Builds a markdown checklist of the user's strict plan (Plan ✓ + Skip ☐),
+   * grouped by area, sorted by difficulty within each area. Later tasks (Plan ✓
+   * + Skip ✗) are deliberately excluded — they are private deferrals, not part
+   * of the share. Returns "" when the strict plan is empty.
    */
   const buildTodoMarkdown = () => {
-    if (todoSet.size === 0) return '';
+    const strict = [...todoSet].filter((id) => !excludedSet.has(id));
+    if (strict.length === 0) return '';
     const DIFF_ORDER = { Easy: 0, Medium: 1, Hard: 2, Elite: 3, Master: 4, '': 5 };
     const byArea = new Map();
     let totalPts = 0;
-    todoSet.forEach((id) => {
+    strict.forEach((id) => {
       const t = tasks.get(id);
       if (!t) return;
       const list = byArea.get(t.area) || [];
@@ -797,8 +939,8 @@
     const today = new Date().toISOString().slice(0, 10);
     const leagueLabel = LEAGUE_KEY.replace(/_/g, ' ');
     const lines = [
-      `# ${leagueLabel} — Todo`,
-      `*Generated ${today} · ${todoSet.size} task${todoSet.size === 1 ? '' : 's'} · ${totalPts} pts*`,
+      `# ${leagueLabel} — Plan`,
+      `*Generated ${today} · ${strict.length} task${strict.length === 1 ? '' : 's'} · ${totalPts} pts*`,
       '',
     ];
     [...byArea.keys()].sort((a, b) => a.localeCompare(b)).forEach((area) => {
@@ -850,8 +992,19 @@
   const updateTodoCount = () => {
     const $el = $('#lf-todo-count');
     if (!$el.length) return;
-    const n = todoSet.size;
-    $el.text(n === 0 ? 'nothing marked' : `${n} task${n === 1 ? '' : 's'} marked`);
+    let planned = 0, later = 0, excluded = 0;
+    todoSet.forEach((id) => {
+      if (excludedSet.has(id)) later += 1;
+      else planned += 1;
+    });
+    excludedSet.forEach((id) => {
+      if (!todoSet.has(id)) excluded += 1;
+    });
+    const parts = [];
+    if (planned)  parts.push(`${planned} planned`);
+    if (later)    parts.push(`${later} later`);
+    if (excluded) parts.push(`${excluded} excluded`);
+    $el.text(parts.length ? parts.join(' · ') : 'nothing curated');
   };
 
   const updateBlockedCount = (count) => {
@@ -875,7 +1028,7 @@
       .show();
   };
 
-  const updateStatus = (visible, visiblePts, totalPts, completedPts) => {
+  const updateStatus = (visible, visiblePts, totalPts, completedPts, planPts, poolPts, excludedPts) => {
     const total = tasks.size;
     const pct = total ? Math.trunc((visible / total) * 1000) / 10 : 0;
     $(`#${STATUS_ID}`).text(`Showing ${visible} / ${total} tasks (${pct}%) — ${visiblePts.toLocaleString()} pts visible`);
@@ -883,6 +1036,9 @@
     $stats.html(`
       <span class="lf-stat-pill"><strong>Total:</strong> ${totalPts.toLocaleString()} pts</span>
       <span class="lf-stat-pill"><strong>Completed:</strong> ${completedPts.toLocaleString()} pts ${totalPts ? `(${Math.trunc(completedPts/totalPts*1000)/10}%)` : ''}</span>
+      <span class="lf-stat-pill"><strong>Plan:</strong> ${planPts.toLocaleString()} pts</span>
+      <span class="lf-stat-pill"><strong>Pool:</strong> ${poolPts.toLocaleString()} pts</span>
+      <span class="lf-stat-pill"><strong>Excluded:</strong> ${excludedPts.toLocaleString()} pts</span>
     `);
   };
 
@@ -938,42 +1094,56 @@
       searchQuery = '';
       pointsMin = 0; pointsMax = Infinity;
       compMin = 0; compMax = 100;
-      // Intentionally do NOT clear todoSet — the shortlist is curated work,
-      // not transient filter state. We only turn off the visibility toggles.
+      // Intentionally do NOT clear todoSet or excludedSet — both are curated
+      // work, not transient filter state. We only turn off the visibility
+      // toggles that gate them.
       todoOnly = false;
+      showLater = false;
+      showExcluded = false;
       hideBlocked = false;
       saveFilters(); saveSearch(); savePoints(); saveComp();
-      saveTodoOnly(); saveHideBlocked();
+      saveTodoOnly(); saveShowLater(); saveShowExcluded(); saveHideBlocked();
       $(`#${FILTERS_ID} input[data-lf-kind]`).prop('checked', false);
       $(`#${SEARCH_ID}`).val('');
       $('#lf-pts-min').val(0); $('#lf-pts-max').val(dims.pointsObserved.max);
       $('#lf-comp-min').val(0); $('#lf-comp-max').val(100);
       $('#lf-todo-only').prop('checked', false);
+      $('#lf-show-later').prop('checked', false);
+      $('#lf-show-excluded').prop('checked', false);
       $('#lf-hide-blocked').prop('checked', false);
       applyFilters();
     });
 
-    // Per-row Todo checkbox. The wiki binds direct click handlers on each <tr>
-    // (WikiSync's row-toggle feature) that call event.stopPropagation() during
-    // bubble — so a delegated handler on the table never sees a click. We
+    // Per-row Plan + Skip checkboxes. The wiki binds direct click handlers on
+    // each <tr> (WikiSync's row-toggle feature) that call event.stopPropagation()
+    // during bubble — so a delegated handler on the table never sees a click. We
     // listen for `change` in capture phase, which is independent of the row's
     // click stopPropagation, and lets the native checkbox toggle happen first.
     const tableEl = document.getElementById(TABLE_ID);
     if (tableEl) {
       tableEl.addEventListener('change', (e) => {
         const cb = e.target;
-        if (!cb || !cb.matches || !cb.matches('input.lf-plan')) return;
-        const id = cb.getAttribute('data-lf-plan-id');
-        if (cb.checked) todoSet.add(id);
-        else todoSet.delete(id);
-        saveTodo();
-        applyPlanRowAttr(id, cb.checked);
-        applyFilters();
+        if (!cb || !cb.matches) return;
+        if (cb.matches('input.lf-plan')) {
+          const id = cb.getAttribute('data-lf-plan-id');
+          if (cb.checked) todoSet.add(id);
+          else todoSet.delete(id);
+          saveTodo();
+          applyRowState(id);
+          applyFilters();
+        } else if (cb.matches('input.lf-skip')) {
+          const id = cb.getAttribute('data-lf-skip-id');
+          if (cb.checked) excludedSet.add(id);
+          else excludedSet.delete(id);
+          saveExcluded();
+          applyRowState(id);
+          applyFilters();
+        }
       }, true);
-      // Belt-and-suspenders: stop click bubbling on the plan cell so the
+      // Belt-and-suspenders: stop click bubbling on the plan/skip cells so the
       // wiki's row handlers (if any) don't react to a checkbox click.
       tableEl.addEventListener('click', (e) => {
-        if (e.target && e.target.matches && e.target.matches('input.lf-plan')) {
+        if (e.target && e.target.matches && (e.target.matches('input.lf-plan') || e.target.matches('input.lf-skip'))) {
           e.stopPropagation();
         }
       }, true);
@@ -985,6 +1155,18 @@
       applyFilters();
     });
 
+    $('#lf-show-later').on('change', function () {
+      showLater = this.checked;
+      saveShowLater();
+      applyFilters();
+    });
+
+    $('#lf-show-excluded').on('change', function () {
+      showExcluded = this.checked;
+      saveShowExcluded();
+      applyFilters();
+    });
+
     $('#lf-hide-blocked').on('change', function () {
       hideBlocked = this.checked;
       saveHideBlocked();
@@ -992,22 +1174,23 @@
     });
 
     $(`#${FILTERS_ID}`).on('click', '[data-lf-clear-todo]', () => {
-      const n = todoSet.size;
-      if (n === 0) return;
-      if (!window.confirm(`Empty your todo list (${n} task${n === 1 ? '' : 's'})?`)) return;
+      const planN = todoSet.size;
+      const skipN = excludedSet.size;
+      if (planN + skipN === 0) return;
+      if (!window.confirm(`Clear all personal markers (${planN} on plan + ${skipN} excluded)?`)) return;
+      const touched = new Set([...todoSet, ...excludedSet]);
       todoSet.clear();
+      excludedSet.clear();
       saveTodo();
-      $(`#${TABLE_ID} tr[data-lf-todo]`).each(function () {
-        const id = $(this).attr('data-taskid');
-        applyPlanRowAttr(id, false);
-      });
+      saveExcluded();
+      touched.forEach((id) => applyRowState(id));
       applyFilters();
     });
 
     $(`#${FILTERS_ID}`).on('click', '[data-lf-export-md]', async () => {
       const md = buildTodoMarkdown();
       if (!md) {
-        showExportToast('Nothing on your todo list yet');
+        showExportToast('Nothing on your plan yet');
         return;
       }
       let ok = false;
@@ -1153,18 +1336,27 @@
   // Expose a debug handle so the user can re-run or inspect from DevTools.
   window.LeaguesFilters = {
     run: main,
-    state: () => ({
-      league: LEAGUE_KEY,
-      tasks: tasks.size,
-      skills: [...dims.skills],
-      difficulties: [...dims.difficulties],
-      wikiHiddenAreas: [...wikiHiddenAreas],
-      activeFilters: [...activeFilters],
-      todo: todoSet.size,
-      todoOnly,
-      hideBlocked,
-      panelInDom: !!document.getElementById(FILTERS_ID),
-    }),
+    state: () => {
+      let planned = 0, later = 0, excluded = 0;
+      todoSet.forEach((id) => { if (excludedSet.has(id)) later += 1; else planned += 1; });
+      excludedSet.forEach((id) => { if (!todoSet.has(id)) excluded += 1; });
+      return {
+        league: LEAGUE_KEY,
+        tasks: tasks.size,
+        skills: [...dims.skills],
+        difficulties: [...dims.difficulties],
+        wikiHiddenAreas: [...wikiHiddenAreas],
+        activeFilters: [...activeFilters],
+        plan: planned,
+        later,
+        excluded,
+        todoOnly,
+        showLater,
+        showExcluded,
+        hideBlocked,
+        panelInDom: !!document.getElementById(FILTERS_ID),
+      };
+    },
   };
 
   log('script loaded');
